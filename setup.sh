@@ -124,7 +124,7 @@ fi
 # --repatch wipes stale patched files then runs from the beginning (phase 0)
 # so prereqs, env checks, etc. all pass before re-patching.
 # An explicit --phase N still overrides this.
-if $FORCE_REPATCH; then
+if [[ "$FORCE_REPATCH" == "1" ]]; then
     info "--repatch: stale patched firmware will be wiped; starting from Phase 0"
 fi
 
