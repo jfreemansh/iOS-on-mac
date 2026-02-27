@@ -8,6 +8,15 @@ run_phase1_environment() {
     ensure_dir "$WORK_DIR" "$DOWNLOADS_DIR" "$LOG_DIR" "$VM_DIR"
     CURRENT_LOG_FILE="$LOG_DIR/phase1.log"
 
+    # Homebrew refuses to run as root; delegate to the real user when under sudo
+    _brew() {
+        if [[ -n "${SUDO_USER:-}" ]]; then
+            sudo -u "${SUDO_USER}" brew "$@"
+        else
+            brew "$@"
+        fi
+    }
+
     # -------------------------------------------------------------------------
     # 1. Homebrew dependencies
     # -------------------------------------------------------------------------
@@ -26,10 +35,10 @@ run_phase1_environment() {
     )
 
     for pkg in "${brew_packages[@]}"; do
-        if brew list "$pkg" &>/dev/null; then
+        if _brew list "$pkg" &>/dev/null; then
             info "Already installed: $pkg"
         else
-            run_or_fail "brew install $pkg" brew install "$pkg"
+            run_or_fail "brew install $pkg" _brew install "$pkg"
         fi
     done
 
@@ -42,7 +51,7 @@ run_phase1_environment() {
         info "ipsw already installed: $(ipsw version 2>/dev/null || echo 'unknown')"
     else
         info "Installing ipsw via Homebrew..."
-        run_or_fail "brew install ipsw" brew install blacktop/tap/ipsw
+        run_or_fail "brew install ipsw" _brew install blacktop/tap/ipsw
     fi
 
     # -------------------------------------------------------------------------
@@ -91,7 +100,7 @@ run_phase1_environment() {
     if check_command ldid; then
         info "ldid already installed"
     else
-        run_or_fail "brew install ldid" brew install ldid
+        run_or_fail "brew install ldid" _brew install ldid
     fi
 
     # -------------------------------------------------------------------------
@@ -175,7 +184,7 @@ run_phase1_environment() {
     if check_command sshpass; then
         info "sshpass already installed"
     else
-        run_or_fail "brew install sshpass" brew install esolitos/ipa/sshpass
+        run_or_fail "brew install sshpass" _brew install esolitos/ipa/sshpass
     fi
 
     # -------------------------------------------------------------------------

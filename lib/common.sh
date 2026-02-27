@@ -181,7 +181,9 @@ run_quiet() {
 save_state() {
     local phase="$1"
     mkdir -p "$(dirname "$STATE_FILE")"
+    _chown_to_real_user "$(dirname "$STATE_FILE")"
     echo "$phase" > "$STATE_FILE"
+    _chown_to_real_user "$STATE_FILE"
     _log_to_file "State saved: $phase"
 }
 
@@ -225,10 +227,18 @@ clear_state() {
 # Directory Helpers
 # =============================================================================
 
+# Fix ownership to real user when running under sudo
+_chown_to_real_user() {
+    if [[ -n "${SUDO_USER:-}" ]]; then
+        chown "${SUDO_USER}" "$@" 2>/dev/null || true
+    fi
+}
+
 ensure_dir() {
     for dir in "$@"; do
         if [[ ! -d "$dir" ]]; then
             mkdir -p "$dir"
+            _chown_to_real_user "$dir"
             _log_to_file "Created directory: $dir"
         fi
     done
