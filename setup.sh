@@ -35,7 +35,7 @@ source "$SCRIPT_DIR/lib/phase7_boot.sh"
 # =============================================================================
 REQUESTED_PHASE=""
 RESUME=false
-RESET=false
+OPT_RESET=false
 CHECK_ONLY=false
 
 while [[ $# -gt 0 ]]; do
@@ -49,7 +49,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --reset)
-            RESET=true
+            OPT_RESET=true
             shift
             ;;
         --check|-c)
@@ -103,7 +103,7 @@ echo ""
 # =============================================================================
 # Handle --reset
 # =============================================================================
-if $RESET; then
+if $OPT_RESET; then
     clear_state
     info "State cleared. Starting fresh."
 fi

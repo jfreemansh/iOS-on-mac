@@ -34,7 +34,7 @@ _timestamp() {
 _log_to_file() {
     local msg="$1"
     if [[ -n "${CURRENT_LOG_FILE:-}" ]]; then
-        echo "[$(_timestamp)] $msg" >> "$CURRENT_LOG_FILE"
+        echo "[$(_timestamp)] $msg" >> "$CURRENT_LOG_FILE" 2>/dev/null || true
     fi
 }
 
