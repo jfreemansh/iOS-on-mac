@@ -54,11 +54,8 @@ _build_vphone_cli() {
     )
 
     local vphone_bin
-    vphone_bin="$(find "$vphone_dir/.build/release" -name "vphone-cli" -type f 2>/dev/null | head -1)"
-    if [[ -z "$vphone_bin" ]]; then
-        # Try alternative binary name
-        vphone_bin="$(find "$vphone_dir/.build/release" -maxdepth 1 -type f -perm +111 2>/dev/null | head -1)"
-    fi
+    # Swift puts the binary under .build/<arch>-apple-macosx/release/, not .build/release/
+    vphone_bin="$(find "$vphone_dir/.build" -name "vphone-cli" -type f ! -path "*dSYM*" ! -path "*/debug/*" 2>/dev/null | head -1)"
 
     if [[ -n "$vphone_bin" ]]; then
         success "vphone-cli built: $vphone_bin"

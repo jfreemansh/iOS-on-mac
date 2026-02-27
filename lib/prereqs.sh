@@ -111,6 +111,23 @@ run_phase_prereqs() {
     fi
 
     # -------------------------------------------------------------------------
+    # Check 6b: iOS SDK (requires full Xcode.app, not just CLT)
+    # Metal compiler plugin build needs xcrun -sdk iphoneos
+    # -------------------------------------------------------------------------
+    step 6 "Checking iOS SDK (needed for Metal GPU plugin)..."
+    local ios_sdk_path
+    ios_sdk_path="$(xcrun -sdk iphoneos --show-sdk-path 2>/dev/null || echo '')"
+    if [[ -n "$ios_sdk_path" ]]; then
+        local ios_sdk_ver
+        ios_sdk_ver="$(xcrun -sdk iphoneos --show-sdk-version 2>/dev/null || echo 'unknown')"
+        results+=("PASS|iOS SDK (Xcode.app)|iOS $ios_sdk_ver at $ios_sdk_path")
+        pass_count=$((pass_count + 1))
+    else
+        results+=("WARN|iOS SDK (Xcode.app)|Not found — Metal GPU plugin will be skipped. Install Xcode.app and run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer")
+        warn_count=$((warn_count + 1))
+    fi
+
+    # -------------------------------------------------------------------------
     # Check 7: Homebrew
     # -------------------------------------------------------------------------
     step 7 "Checking Homebrew..."

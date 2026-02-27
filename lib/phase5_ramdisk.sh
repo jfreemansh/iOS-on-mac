@@ -38,7 +38,7 @@ run_phase5_ramdisk() {
     # -------------------------------------------------------------------------
     section "Preparing VM"
 
-    _ensure_vm_exists "$vm_tool" "$vm_name"
+    _ensure_vm_disk_exists "$vm_tool" "$vm_name"
 
     # -------------------------------------------------------------------------
     # 2. Boot into DFU mode
@@ -48,7 +48,15 @@ run_phase5_ramdisk() {
     info "Starting VM in DFU mode..."
     info "The VM will wait for firmware to be loaded."
 
-    "$vm_tool" run "$vm_name" --dfu &
+    # vphone-cli takes direct flags; it has no 'run <name>' subcommand.
+    "$vm_tool" \
+        --rom    "$VM_ROM_PATH" \
+        --disk   "$VM_DISK" \
+        --nvram  "$VM_NVRAM" \
+        --sep-rom "$VM_SEP_ROM_PATH" \
+        --cpu    "$VM_CPU" \
+        --memory "$VM_MEMORY" \
+        --dfu --no-graphics &
     local dfu_pid=$!
     register_pid "$dfu_pid"
 
@@ -87,9 +95,10 @@ run_phase5_ramdisk() {
     local vm_ip=""
     info "Getting VM IP address..."
 
-    # Retry getting IP for up to 60 seconds
+    # vphone-cli has no 'ip <name>' subcommand; detect the guest IP from the
+    # Virtualization.framework DHCP lease table or via arp on the private subnet.
     for attempt in $(seq 1 30); do
-        vm_ip="$("$vm_tool" ip "$vm_name" 2>/dev/null || echo "")"
+        vm_ip="$(_get_vphone_ip 2>/dev/null || echo '')"
         if [[ -n "$vm_ip" ]] && [[ "$vm_ip" != "0.0.0.0" ]]; then
             break
         fi
@@ -168,87 +177,129 @@ run_phase5_ramdisk() {
 # =============================================================================
 
 
-_ensure_vm_exists() {
+_ensure_vm_disk_exists() {
     local vm_tool="$1"
     local vm_name="$2"
 
-    # Check if VM already exists
-    if "$vm_tool" list 2>/dev/null | grep -q "$vm_name"; then
-        info "VM '$vm_name' already exists"
+    if [[ "$VM_APPROACH" != "vphone-cli" ]]; then
+        # super-tart retains Tart-style create/list subcommands
+        if ! "$vm_tool" list 2>/dev/null | grep -q "$vm_name"; then
+            info "Creating VM '$vm_name' (super-tart)..."
+            "$vm_tool" create "$vm_name" \
+                --cpu "$VM_CPU" \
+                --memory "$VM_MEMORY" \
+                2>&1 | tee -a "$CURRENT_LOG_FILE" || true
+            success "VM '$vm_name' created"
+        else
+            info "VM '$vm_name' already exists"
+        fi
         return 0
     fi
 
-    info "Creating VM '$vm_name'..."
+    # vphone-cli: just need a disk image on disk — no VM registry.
+    if [[ -f "$VM_DISK" ]]; then
+        info "VM disk already exists: $VM_DISK"
+    else
+        info "Creating sparse VM disk image ($VM_DISK_SIZE) at $VM_DISK ..."
+        ensure_dir "$(dirname "$VM_DISK")"
+        # hdiutil creates <name>.sparseimage; rename to <name>.img for vphone-cli
+        hdiutil create -size "$VM_DISK_SIZE" -type SPARSE -layout NONE \
+            "${VM_DISK%.img}" 2>&1 | tee -a "$CURRENT_LOG_FILE"
+        if [[ -f "${VM_DISK%.img}.sparseimage" ]]; then
+            mv "${VM_DISK%.img}.sparseimage" "$VM_DISK"
+        fi
+        success "VM disk created: $VM_DISK"
+    fi
 
-    # Create VM with the appropriate configuration
-    case "$VM_APPROACH" in
-        vphone-cli)
-            "$vm_tool" create "$vm_name" \
-                --cpu "$VM_CPU" \
-                --memory "$VM_MEMORY" \
-                --display "${VM_DISPLAY_WIDTH}x${VM_DISPLAY_HEIGHT}" \
-                2>&1 | tee -a "$CURRENT_LOG_FILE" || true
-            ;;
-        super-tart)
-            "$vm_tool" create "$vm_name" \
-                --cpu "$VM_CPU" \
-                --memory "$VM_MEMORY" \
-                2>&1 | tee -a "$CURRENT_LOG_FILE" || true
-            ;;
-    esac
-
-    success "VM '$vm_name' created"
+    # Validate the ROM binary exists before we try to boot
+    if [[ ! -f "$VM_ROM_PATH" ]]; then
+        error "AVPBooter ROM not found: $VM_ROM_PATH"
+        error "Expected in: /System/Library/Frameworks/Virtualization.framework/Versions/A/Resources/"
+        return 1
+    fi
+    info "ROM: $VM_ROM_PATH"
 }
 
 _load_bootchain_vphone() {
-    local vm_tool="$1"
-    local vm_name="$2"
+    # vphone-cli has no 'restore <name> --component' subcommand.
+    # The virtual device appears to the host as a USB DFU device and is loaded
+    # via irecovery exactly like a physical iPhone in DFU mode.
 
-    # vphone-cli has its own boot chain loading
-    # It typically uses the CFW directory or a boot script
-    local cfw_dir="$SCRIPT_DIR/CFW"
-    local boot_rd_script="$cfw_dir/boot_rd.sh"
-
-    if [[ -f "$boot_rd_script" ]]; then
-        info "Loading boot chain via boot_rd.sh..."
-        (cd "$cfw_dir" && bash ./boot_rd.sh) 2>&1 | tee -a "$CURRENT_LOG_FILE"
-    else
-        # Manual boot chain loading
-        info "Loading boot chain components manually..."
-
-        local patched_dir="$WORK_DIR/patched"
-
-        for component in iBSS iBEC kernelcache DeviceTree; do
-            local fw_file="$patched_dir/${component}.img4"
-            [[ -f "$fw_file" ]] || fw_file="$patched_dir/${component}.patched"
-            [[ -f "$fw_file" ]] || continue
-
-            info "  Sending $component..."
-            "$vm_tool" restore "$vm_name" --component "$component" \
-                --file "$fw_file" 2>&1 | tee -a "$CURRENT_LOG_FILE" || \
-                warn "  Failed to send $component"
-        done
-
-        # Send ramdisk
-        local ramdisk
-        ramdisk="$(find "$WORK_DIR/firmware" -iname "*RestoreRamDisk*" 2>/dev/null | head -1)"
-        if [[ -n "$ramdisk" ]]; then
-            info "  Sending ramdisk..."
-            "$vm_tool" restore "$vm_name" --component ramdisk \
-                --file "$ramdisk" 2>&1 | tee -a "$CURRENT_LOG_FILE" || \
-                warn "  Failed to send ramdisk"
-        fi
-
-        # Send trust cache
-        local trustcache
-        trustcache="$(find "$VM_DIR" -iname "*TrustCache*" 2>/dev/null | head -1)"
-        if [[ -n "$trustcache" ]]; then
-            info "  Sending trust cache..."
-            "$vm_tool" restore "$vm_name" --component trustcache \
-                --file "$trustcache" 2>&1 | tee -a "$CURRENT_LOG_FILE" || \
-                warn "  Failed to send trust cache"
-        fi
+    if ! check_command irecovery; then
+        error "irecovery not found in PATH."
+        error "Install via:  brew install libirecovery"
+        error "Or re-run Phase 1 — it now installs libirecovery automatically."
+        return 1
     fi
+
+    local patched_dir="$WORK_DIR/patched"
+
+    # Wait for the DFU device to appear (up to 30 s)
+    info "  Waiting for DFU device to appear..."
+    local dfu_found=false
+    for attempt in $(seq 1 15); do
+        if irecovery -q &>/dev/null; then
+            dfu_found=true
+            break
+        fi
+        sleep 2
+    done
+    if ! $dfu_found; then
+        warn "  DFU device not detected by irecovery — sending firmware anyway"
+    fi
+
+    # Step 1: iBSS  (device re-enters DFU after receiving iBSS)
+    local ibss="$patched_dir/iBSS.img4"
+    [[ -f "$ibss" ]] || ibss="$patched_dir/iBSS.patched"
+    if [[ -f "$ibss" ]]; then
+        info "  Sending iBSS..."
+        irecovery -f "$ibss" 2>&1 | tee -a "$CURRENT_LOG_FILE" || warn "  iBSS send returned non-zero"
+        sleep 3
+    else
+        warn "  iBSS not found in $patched_dir"
+    fi
+
+    # Step 2: iBEC  (device enters recovery mode)
+    local ibec="$patched_dir/iBEC.img4"
+    [[ -f "$ibec" ]] || ibec="$patched_dir/iBEC.patched"
+    if [[ -f "$ibec" ]]; then
+        info "  Sending iBEC..."
+        irecovery -f "$ibec" 2>&1 | tee -a "$CURRENT_LOG_FILE" || warn "  iBEC send returned non-zero"
+        sleep 3
+    else
+        warn "  iBEC not found in $patched_dir"
+    fi
+
+    # Step 3: set boot-args for ramdisk boot
+    info "  Setting boot-args for ramdisk..."
+    irecovery -s "setenv boot-args $BOOT_ARGS_RAMDISK" 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
+    irecovery -s "saveenv"                              2>&1 | tee -a "$CURRENT_LOG_FILE" || true
+
+    # Step 4: kernelcache
+    local kc="$patched_dir/kernelcache.img4"
+    [[ -f "$kc" ]] || kc="$patched_dir/kernelcache.patched"
+    if [[ -f "$kc" ]]; then
+        info "  Sending kernelcache..."
+        irecovery -f "$kc" 2>&1 | tee -a "$CURRENT_LOG_FILE" || warn "  kernelcache send returned non-zero"
+        sleep 2
+    else
+        warn "  kernelcache not found in $patched_dir"
+    fi
+
+    # Step 5: ramdisk
+    local ramdisk
+    ramdisk="$(find "$WORK_DIR/firmware" -iname "*RestoreRamDisk*" 2>/dev/null | head -1)"
+    if [[ -n "$ramdisk" ]]; then
+        info "  Sending ramdisk..."
+        irecovery -f "$ramdisk" 2>&1 | tee -a "$CURRENT_LOG_FILE" || warn "  ramdisk send returned non-zero"
+        sleep 2
+    else
+        warn "  RestoreRamDisk not found under $WORK_DIR/firmware"
+    fi
+
+    # Step 6: boot
+    info "  Sending boot command..."
+    irecovery -s "bootx" 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
 }
 
 _load_bootchain_supertart() {

@@ -32,6 +32,7 @@ run_phase1_environment() {
         jq
         unzip
         p7zip
+        libirecovery
     )
 
     for pkg in "${brew_packages[@]}"; do
@@ -60,6 +61,18 @@ run_phase1_environment() {
     section "Installing img4lib"
 
     local img4lib_dir="$WORK_DIR/tools/img4lib"
+
+    # Detect stale binaries linked against shared liblzfse.dylib with no LC_RPATH
+    # (built before the -DBUILD_SHARED_LIBS=OFF fix).  They crash at runtime with
+    # "dyld: Library not loaded: @rpath/liblzfse.dylib / Reason: no LC_RPATH's found".
+    # Removing the stale binary forces the clean static-link rebuild below.
+    if [[ -f "$img4lib_dir/img4" ]] && \
+       otool -L "$img4lib_dir/img4" 2>/dev/null | grep -q '@rpath/liblzfse.dylib' && \
+       ! otool -l "$img4lib_dir/img4" 2>/dev/null | grep -q 'LC_RPATH'; then
+        warn "img4 binary linked against shared liblzfse.dylib (no rpath) — removing stale binary for static rebuild"
+        rm -f "$img4lib_dir/img4"
+    fi
+
     if [[ -f "$img4lib_dir/img4" ]]; then
         info "img4lib already built"
     else
@@ -84,8 +97,9 @@ run_phase1_environment() {
             fi
             # Clear stale CMakeCache so cmake -B works cleanly
             rm -rf lzfse/build
-            # -DCMAKE_POLICY_VERSION_MINIMUM=3.5 needed for lzfse's old CMakeLists.txt
-            (cd lzfse && cmake -B build -S . -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && cmake --build build --parallel "$(sysctl -n hw.ncpu)")
+            # -DCMAKE_POLICY_VERSION_MINIMUM=3.5: lzfse's old CMakeLists.txt requires cmake < 3.5
+            # -DBUILD_SHARED_LIBS=OFF: build only liblzfse.a so img4 links statically (no dylib rpath needed)
+            (cd lzfse && cmake -B build -S . -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_SHARED_LIBS=OFF && cmake --build build --parallel "$(sysctl -n hw.ncpu)")
             # Locate openssl (Homebrew puts headers in a non-default prefix)
             openssl_prefix="$(_brew --prefix openssl@3 2>/dev/null || _brew --prefix openssl 2>/dev/null || echo /opt/homebrew/opt/openssl@3)"
             # -DiOS10 enables ep_info/compression fields in TheImg4Payload

@@ -51,10 +51,17 @@ run_phase7_boot() {
     info "Display: ${VM_DISPLAY_WIDTH}x${VM_DISPLAY_HEIGHT} @ ${VM_DISPLAY_PPI}ppi"
     info "CPU: $VM_CPU cores, RAM: $((VM_MEMORY / 1024))GB"
 
-    local boot_cmd=("$vm_tool" "run" "$vm_name")
-
-    # Add VNC support if available
-    boot_cmd+=("--vnc-experimental")
+    # vphone-cli takes direct flags — no 'run <name>' or '--vnc-experimental' subcommand.
+    local boot_cmd=(
+        "$vm_tool"
+        --rom    "$VM_ROM_PATH"
+        --disk   "$VM_DISK"
+        --nvram  "$VM_NVRAM"
+        --sep-rom "$VM_SEP_ROM_PATH"
+        --cpu    "$VM_CPU"
+        --memory "$VM_MEMORY"
+        --no-graphics
+    )
 
     info ""
     info "Boot command: ${boot_cmd[*]}"
@@ -82,7 +89,8 @@ run_phase7_boot() {
             return 1
         fi
 
-        vm_ip="$("$vm_tool" ip "$vm_name" 2>/dev/null || echo "")"
+        # vphone-cli has no 'ip <name>' subcommand; detect via DHCP leases / arp.
+        vm_ip="$(_get_vphone_ip 2>/dev/null || echo '')"
         if [[ -n "$vm_ip" ]] && [[ "$vm_ip" != "0.0.0.0" ]]; then
             break
         fi

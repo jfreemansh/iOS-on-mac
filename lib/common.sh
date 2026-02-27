@@ -309,6 +309,50 @@ _find_vm_tool() {
     return 1
 }
 
+# Detect the guest IP for a vphone-cli VM.
+# vphone-cli has no 'ip <name>' subcommand.  Virtualization.framework VMs
+# are NAT-ed on a private 192.168.64.0/24 network; the host is .1 and guests
+# receive .2+.  We probe three sources in order:
+#   1. /var/db/dhcpd_leases  — most reliable when readable
+#   2. arp -an               — fast scan of the known subnet
+#   3. Returns 1 (caller should fall back to localhost:$SSH_LOCAL_PORT)
+_get_vphone_ip() {
+    local lease_file="/var/db/dhcpd_leases"
+
+    # Source 1: DHCP lease table (Virtualization.framework writes here)
+    if [[ -r "$lease_file" ]]; then
+        local ip
+        # Each lease block looks like:  { name=… ip_address=192.168.64.X … }
+        # Skip the host address (.1) and grab the last assigned guest IP.
+        ip="$(awk '
+            /\{/  { ip="" }
+            /ip_address/ { ip = $NF }
+            /\}/ {
+                if (ip != "" && ip != "192.168.64.1") print ip
+                ip=""
+            }' "$lease_file" 2>/dev/null | tail -1)"
+        if [[ -n "$ip" ]]; then
+            echo "$ip"
+            return 0
+        fi
+    fi
+
+    # Source 2: ARP table — look for live hosts in the vf NAT subnet
+    local arp_ip
+    arp_ip="$(arp -an 2>/dev/null \
+        | grep '192\.168\.64\.' \
+        | grep -v '192\.168\.64\.1[^0-9]' \
+        | grep -v 'incomplete' \
+        | awk '{gsub(/[()]/,""); print $2}' \
+        | head -1)"
+    if [[ -n "$arp_ip" ]]; then
+        echo "$arp_ip"
+        return 0
+    fi
+
+    return 1
+}
+
 # =============================================================================
 # Download Helpers
 # =============================================================================

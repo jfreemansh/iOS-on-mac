@@ -77,3 +77,15 @@ BOOT_ARGS_NORMAL="serial=3 -v debug=0x2014e"
 VM_DISPLAY_WIDTH=1290
 VM_DISPLAY_HEIGHT=2796
 VM_DISPLAY_PPI=460
+
+# =============================================================================
+# VM Runtime File Paths (vphone-cli)
+# vphone-cli is a single-invocation binary that takes direct --rom/--disk flags;
+# it has no create/list/run/ip subcommands like Tart.
+# =============================================================================
+_AVP_RESOURCES="/System/Library/Frameworks/Virtualization.framework/Versions/A/Resources"
+VM_ROM_PATH="$_AVP_RESOURCES/AVPBooter.vresearch1.bin"
+VM_SEP_ROM_PATH="$_AVP_RESOURCES/AVPSEPBooter.vresearch1.bin"
+VM_DISK="$VM_DIR/disk.img"
+VM_NVRAM="$VM_DIR/nvram.bin"
+VM_DISK_SIZE="64g"   # Sparse disk image size for the iOS install

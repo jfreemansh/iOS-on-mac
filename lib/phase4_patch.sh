@@ -196,6 +196,8 @@ run_phase4_patch() {
 
         # Decompress if compressed (kernelcache is often lzfse-compressed)
         local kc_decompressed="$patch_dir/kernelcache.decompressed"
+        # Clean up stale directory left by a previous ipsw kernel dec run
+        [[ -d "$kc_decompressed" ]] && rm -rf "$kc_decompressed"
         if ! _try_decompress_kc "$kc_raw" "$kc_decompressed"; then
             cp "$kc_raw" "$kc_decompressed"
         fi
@@ -436,7 +438,23 @@ _try_decompress_kc() {
         *)
             # Try ipsw tool for decompression
             if check_command ipsw; then
-                ipsw kernel dec "$input" -o "$output" 2>/dev/null && return 0
+                # ipsw kernel dec treats -o as a directory and puts the
+                # decompressed file inside it — find and move it out
+                rm -rf "$output"
+                ipsw kernel dec "$input" -o "$output" 2>/dev/null
+                if [[ -d "$output" ]]; then
+                    local inner
+                    inner="$(find "$output" -maxdepth 1 -type f | head -1)"
+                    if [[ -n "$inner" ]]; then
+                        local tmp="${output}.tmp"
+                        mv "$inner" "$tmp"
+                        rm -rf "$output"
+                        mv "$tmp" "$output"
+                        return 0
+                    fi
+                elif [[ -f "$output" ]]; then
+                    return 0
+                fi
             fi
             ;;
     esac
