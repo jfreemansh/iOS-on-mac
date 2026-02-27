@@ -586,8 +586,10 @@ _build_ramdisk_upstream() {
     fi
 
     # Check for SHSH blobs (required for IMG4 signing)
+    # Use find -o instead of ls glob: ls *.shsh *.shsh2 exits non-zero when
+    # only one extension exists (e.g. no *.shsh2), causing a false "not found".
     local shsh_dir="$WORK_DIR/shsh"
-    if ! ls "$shsh_dir"/*.shsh "$shsh_dir"/*.shsh2 &>/dev/null 2>&1; then
+    if [[ -z "$(find "$shsh_dir" \( -name "*.shsh" -o -name "*.shsh2" \) 2>/dev/null | head -1)" ]]; then
         warn "No SHSH blobs found in $shsh_dir/"
         warn "SHSH blobs are required to sign ramdisk IMG4 components."
         warn ""
