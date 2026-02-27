@@ -56,6 +56,7 @@ run_phase5_ramdisk() {
         --sep-rom "$VM_SEP_ROM_PATH" \
         --cpu    "$VM_CPU" \
         --memory "$VM_MEMORY" \
+        --serial-log "$VM_DIR/serial_phase5.log" \
         --dfu --no-graphics &
     local dfu_pid=$!
     register_pid "$dfu_pid"
