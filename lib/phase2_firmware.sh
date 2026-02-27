@@ -64,10 +64,16 @@ run_phase2_firmware() {
         info "Attempting to obtain cloudOS IPSW via pccvre..."
 
         # Try Apple's PCC Virtual Research Environment tool
-        if check_command pccvre; then
+        # pccvre ships in a non-standard path on some systems
+        local pccvre_bin="pccvre"
+        if ! check_command pccvre && [[ -x "/System/Library/SecurityResearch/usr/bin/pccvre" ]]; then
+            pccvre_bin="/System/Library/SecurityResearch/usr/bin/pccvre"
+        fi
+
+        if check_command pccvre || [[ -x "/System/Library/SecurityResearch/usr/bin/pccvre" ]]; then
             info "Using pccvre to download PCC release $PCC_RELEASE..."
             # pccvre downloads to the current directory; cd into downloads dir
-            (cd "$DOWNLOADS_DIR" && pccvre release download --release "$PCC_RELEASE") \
+            (cd "$DOWNLOADS_DIR" && "$pccvre_bin" release download --release "$PCC_RELEASE") \
                 2>&1 | tee -a "$CURRENT_LOG_FILE"
 
             # Look for the downloaded IPSW (pccvre may nest it in a subdirectory)
