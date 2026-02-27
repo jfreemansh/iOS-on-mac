@@ -128,7 +128,7 @@ run_phase1_environment() {
     fi
 
     # -------------------------------------------------------------------------
-    # 5. Rosetta 2 (required for keystone-engine x86_64 build)
+    # 5. Rosetta 2 (may be needed by vphone-cli build or x86_64 tooling)
     # -------------------------------------------------------------------------
     section "Setting up Rosetta 2"
 
@@ -140,64 +140,75 @@ run_phase1_environment() {
     fi
 
     # -------------------------------------------------------------------------
-    # 6. Python x86_64 venv with keystone-engine
+    # 6. Python patching tools — fw_patch.py / ramdisk_build.py dependencies
     # -------------------------------------------------------------------------
-    section "Setting up x86_64 Python venv (keystone-engine)"
+    section "Installing Python patching tools (native arm64)"
 
-    if [[ -f "$ROSETTA_VENV/bin/activate" ]] && \
-       run_in_rosetta_venv "python3 -c 'import keystone'" 2>/dev/null; then
-        info "Rosetta Python venv with keystone-engine already configured"
-    else
-        info "Creating x86_64 Python virtual environment..."
-
-        # Use the system Python under Rosetta
-        /usr/bin/arch -x86_64 /bin/zsh -c "
-            /usr/bin/python3 -m venv '$ROSETTA_VENV'
-            source '$ROSETTA_VENV/bin/activate'
-            pip install --upgrade pip
-            pip install keystone-engine
-        "
-
-        if run_in_rosetta_venv "python3 -c 'import keystone; print(\"keystone OK\")'"; then
-            success "keystone-engine installed in Rosetta venv"
-        else
-            error "Failed to install keystone-engine"
-            return 1
+    # The firmware and ramdisk patchers (patchers/iboot.py, patchers/kernel.py,
+    # patchers/txm.py, fw_patch.py, ramdisk_build.py) run under native arm64
+    # python3 and require three packages:
+    #   keystone-engine  — assembler for iBoot/kernel patches
+    #   capstone         — disassembler used by KernelPatcher
+    #   pyimg4           — IMG4 container r/w; also installs the `pyimg4` CLI
+    #                      that ramdisk_build.py calls via subprocess
+    local _pip_packages=("keystone-engine" "capstone" "pyimg4")
+    local _missing_packages=()
+    for _pkg in "${_pip_packages[@]}"; do
+        local _mod="${_pkg//-/_}"
+        [[ "$_mod" == "keystone_engine" ]] && _mod="keystone"
+        if ! python3 -c "import $_mod" &>/dev/null; then
+            _missing_packages+=("$_pkg")
         fi
+    done
+
+    if [[ ${#_missing_packages[@]} -eq 0 ]]; then
+        info "Python patching tools already installed"
+    else
+        info "Installing: ${_missing_packages[*]}"
+        if ! python3 -m pip install --quiet "${_missing_packages[@]}" 2>/dev/null; then
+            run_or_fail "pip3 install patching tools" pip3 install "${_missing_packages[@]}"
+        fi
+        success "Python patching tools installed"
     fi
 
-    # -------------------------------------------------------------------------
-    # 7. kairos — iBoot patcher (if available)
-    # -------------------------------------------------------------------------
-    section "Checking kairos (iBoot patcher)"
-
-    local kairos_dir="$WORK_DIR/tools/kairos"
-    if [[ -f "$kairos_dir/kairos" ]]; then
-        info "kairos already built"
-    else
-        ensure_dir "$WORK_DIR/tools"
-        if [[ -d "$kairos_dir" ]]; then
-            git -C "$kairos_dir" pull --ff-only 2>/dev/null || true
+    # Ensure the pyimg4 CLI binary is reachable on PATH.
+    # pip installs user-local scripts to ~/Library/Python/X.Y/bin on macOS
+    # which is not always on PATH by default.
+    if ! check_command pyimg4; then
+        local _user_bin
+        _user_bin="$(python3 -m site --user-base 2>/dev/null)/bin"
+        if [[ -x "$_user_bin/pyimg4" ]]; then
+            export PATH="$_user_bin:$PATH"
+            info "Added $_user_bin to PATH (pyimg4 CLI)"
         else
-            info "Cloning kairos..."
-            git clone https://github.com/dayt0n/kairos.git "$kairos_dir" 2>/dev/null || \
-                warn "kairos not available — firmware patching will use manual methods"
-        fi
-        if [[ -d "$kairos_dir" ]]; then
-            info "Building kairos..."
-            # kairos uses a plain Makefile (no CMake); binary lands in the repo root
-            (
-                cd "$kairos_dir"
-                make -j"$(sysctl -n hw.ncpu)"
-            ) 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
-            if [[ -f "$kairos_dir/kairos" ]]; then
-                success "kairos built successfully"
+            local _found_pyimg4
+            _found_pyimg4="$(find /opt/homebrew/bin /usr/local/bin "$HOME/Library" \
+                -name pyimg4 -type f 2>/dev/null | head -1)"
+            if [[ -n "$_found_pyimg4" ]]; then
+                export PATH="$(dirname "$_found_pyimg4"):$PATH"
+                info "Found pyimg4 at: $_found_pyimg4"
             else
-                warn "kairos build failed — will fall back to manual patching"
+                warn "pyimg4 CLI not found on PATH — ramdisk signing may fail."
+                warn "Run: python3 -m pip install pyimg4  and add the bin dir to PATH"
             fi
         fi
     fi
-    [[ -f "$kairos_dir/kairos" ]] && export PATH="$kairos_dir:$PATH"
+    check_command pyimg4 && info "pyimg4 CLI: $(command -v pyimg4)"
+
+    # -------------------------------------------------------------------------
+    # 7. SHSH blobs directory
+    # -------------------------------------------------------------------------
+    section "Creating SHSH blobs directory"
+
+    ensure_dir "$WORK_DIR/shsh"
+    if [[ -z "$(ls -A "$WORK_DIR/shsh" 2>/dev/null)" ]]; then
+        warn "No SHSH blobs found in $WORK_DIR/shsh/"
+        warn "ramdisk_build.py needs a saved .shsh/.shsh2 blob to sign firmware images."
+        warn "Obtain blobs with: ipsw download appledb --device vphone600 --version <iOS>"
+        warn "Then copy the .shsh2 file to: $WORK_DIR/shsh/"
+    else
+        info "SHSH blobs present: $(ls "$WORK_DIR/shsh/" | tr '\n' ' ')"
+    fi
 
     # -------------------------------------------------------------------------
     # 8. sshpass (for automated SSH to ramdisk)
@@ -215,12 +226,21 @@ run_phase1_environment() {
     # -------------------------------------------------------------------------
     echo ""
     section "Environment Summary"
-    local tools=("ipsw" "img4" "ldid" "sshpass" "cmake" "ninja" "jq" "wget" "irecovery")
+    local tools=("ipsw" "img4" "ldid" "sshpass" "cmake" "ninja" "jq" "wget" "irecovery" "pyimg4")
     for tool in "${tools[@]}"; do
         if check_command "$tool"; then
             success "  $tool: $(command -v "$tool")"
         else
             warn "  $tool: NOT FOUND"
+        fi
+    done
+
+    # Python patching packages
+    for _mod in keystone capstone pyimg4; do
+        if python3 -c "import $_mod" &>/dev/null; then
+            success "  python3/$_mod: OK"
+        else
+            warn "  python3/$_mod: NOT INSTALLED"
         fi
     done
 

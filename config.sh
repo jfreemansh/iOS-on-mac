@@ -23,7 +23,7 @@ VM_DIR="$WORK_DIR/VM"                 # VM runtime files (ROM, disk, nvram)
 DOWNLOADS_DIR="$WORK_DIR/downloads"   # Cached firmware downloads
 LOG_DIR="$WORK_DIR/logs"              # Per-phase log files
 STATE_FILE="$WORK_DIR/.setup_state"   # Resume state tracking
-ROSETTA_VENV="$WORK_DIR/.venv_rosetta" # x86_64 Python venv for keystone-engine
+ROSETTA_VENV="$WORK_DIR/.venv_rosetta" # legacy: x86_64 Rosetta venv (no longer used for patching)
 
 # =============================================================================
 # Repository URLs

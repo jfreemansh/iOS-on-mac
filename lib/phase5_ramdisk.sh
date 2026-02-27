@@ -221,29 +221,49 @@ _ensure_vm_disk_exists() {
 }
 
 _load_bootchain_vphone() {
-    # vphone-cli has no 'restore <name> --component' subcommand.
-    # The virtual device appears to the host as a USB DFU device and is loaded
-    # via irecovery exactly like a physical iPhone in DFU mode.
+    # Send firmware via irecovery following the upstream ramdisk_send.sh sequence.
+    # All IMG4 components are pre-signed and come from $WORK_DIR/Ramdisk/
+    # (built by ramdisk_build.py in Phase 4).
+    #
+    # Sequence (mirrors scripts/ramdisk_send.sh):
+    #   iBSS → sleep 1 → iBEC → go → sleep 1
+    #   → SPTM+firmware → TXM+firmware → trustcache+firmware
+    #   → sleep 2 → ramdisk → sleep 2 → ramdisk-cmd
+    #   → DeviceTree+devicetree → SEP+firmware → krnl+bootx
 
     if ! check_command irecovery; then
-        error "irecovery not found in PATH."
-        error "Install via:  brew install libirecovery"
-        error "Or re-run Phase 1 — it now installs libirecovery automatically."
+        error "irecovery not found. Install via:  brew install libirecovery"
         return 1
     fi
 
-    local patched_dir="$WORK_DIR/patched"
+    local ramdisk_dir="$WORK_DIR/Ramdisk"
+    if [[ ! -d "$ramdisk_dir" ]]; then
+        error "Ramdisk directory not found: $ramdisk_dir"
+        error "Run Phase 4 first (ramdisk_build.py must succeed with SHSH blobs)."
+        return 1
+    fi
 
     # -------------------------------------------------------------------------
-    # Helper: poll until irecovery can see a recovery/DFU device (up to ~60 s)
-    # After each DFU stage transition the virtual device re-enumerates over USB
-    # and irecovery needs time to reconnect to the new device identity.
+    # Helper: send one IMG4 file via irecovery
+    # -------------------------------------------------------------------------
+    _send_img4() {
+        local path="$1"
+        local label="$2"
+        if [[ ! -f "$path" ]]; then
+            warn "  $label: file not found — $path"
+            return 1
+        fi
+        info "  Sending $label ($(basename "$path"), $(du -h "$path" | cut -f1))..."
+        irecovery -f "$path" 2>&1 | tee -a "$CURRENT_LOG_FILE"
+        return 0
+    }
+
+    # -------------------------------------------------------------------------
+    # Helper: poll until irecovery sees a DFU/recovery device
     # -------------------------------------------------------------------------
     _irecovery_wait() {
         local label="$1"
-        local max_attempts="${2:-30}"
-        info "  Waiting for device to re-enumerate ($label)..."
-        local attempt
+        local max_attempts="${2:-15}"
         for attempt in $(seq 1 "$max_attempts"); do
             if irecovery -q &>/dev/null; then
                 info "  Device ready ($label, attempt $attempt)"
@@ -251,109 +271,63 @@ _load_bootchain_vphone() {
             fi
             sleep 2
         done
-        warn "  Device not detected after ${label} — continuing anyway"
+        warn "  Device not detected after $label — continuing anyway"
         return 1
     }
 
-    # Step 0: Wait for the initial DFU device to appear
+    # Wait for the initial DFU device to appear before we start
     _irecovery_wait "initial DFU" 20 || true
 
-    # Step 1: iBSS
-    # After iBSS the device transitions DFU → iBSS mode and re-enumerates.
-    local ibss="$patched_dir/iBSS.img4"
-    [[ -f "$ibss" ]] || ibss="$patched_dir/iBSS.patched"
-    if [[ -f "$ibss" ]]; then
-        info "  Sending iBSS..."
-        irecovery -f "$ibss" 2>&1 | tee -a "$CURRENT_LOG_FILE" || warn "  iBSS send returned non-zero"
-        # Hard lead-time: the VM must actually execute iBSS before it can
-        # re-enumerate over USB — polling immediately will always miss it.
-        info "  Sleeping 10s for iBSS VM execution..."
-        sleep 10
-        # Device re-enumerates; poll until irecovery sees the new device.
-        _irecovery_wait "post-iBSS (iBSS/Recovery mode)" 30
-    else
-        warn "  iBSS not found in $patched_dir"
-    fi
-
-    # Step 2: iBEC
-    # After iBEC the device transitions iBSS → iBEC/Recovery mode and re-enumerates.
-    local ibec="$patched_dir/iBEC.img4"
-    [[ -f "$ibec" ]] || ibec="$patched_dir/iBEC.patched"
-    if [[ -f "$ibec" ]]; then
-        info "  Sending iBEC..."
-        irecovery -f "$ibec" 2>&1 | tee -a "$CURRENT_LOG_FILE" || warn "  iBEC send returned non-zero"
-        # Hard lead-time before polling
-        info "  Sleeping 10s for iBEC VM execution..."
-        sleep 10
-        # Device re-enumerates again into recovery (iBEC) mode
-        _irecovery_wait "post-iBEC (Recovery mode)" 30
-    else
-        warn "  iBEC not found in $patched_dir"
-    fi
-
-    # Step 3: set boot-args for ramdisk boot
-    info "  Setting boot-args for ramdisk..."
-    irecovery -s "setenv boot-args $BOOT_ARGS_RAMDISK" 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
-    irecovery -s "saveenv"                              2>&1 | tee -a "$CURRENT_LOG_FILE" || true
+    # ── Step 1: iBSS ──────────────────────────────────────────────────────────
+    _send_img4 "$ramdisk_dir/iBSS.vresearch101.RELEASE.img4" "iBSS" || return 1
     sleep 1
+    _irecovery_wait "post-iBSS" 15 || true
 
-    # Step 4: kernelcache
-    local kc="$patched_dir/kernelcache.img4"
-    [[ -f "$kc" ]] || kc="$patched_dir/kernelcache.patched"
-    if [[ -f "$kc" ]]; then
-        info "  Sending kernelcache..."
-        irecovery -f "$kc" 2>&1 | tee -a "$CURRENT_LOG_FILE" || warn "  kernelcache send returned non-zero"
-        sleep 2
-    else
-        warn "  kernelcache not found in $patched_dir"
-    fi
+    # ── Step 2: iBEC + go ─────────────────────────────────────────────────────
+    _send_img4 "$ramdisk_dir/iBEC.vresearch101.RELEASE.img4" "iBEC" || return 1
+    info "  Sending irecovery command: go"
+    irecovery -c go 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
+    sleep 1
+    _irecovery_wait "post-iBEC/go" 15 || true
 
-    # Step 5: ramdisk
-    # Modern IPSWs store the ramdisk with a cryptic filename (e.g. 048-xxxxx.dmg).
-    # Try an explicit name match first, then fall back to BuildManifest.plist lookup.
-    local ramdisk=""
-    ramdisk="$(find "$WORK_DIR/firmware" -iname "*RestoreRamDisk*" 2>/dev/null | head -1)"
+    # ── Step 3: SPTM ─────────────────────────────────────────────────────────
+    _send_img4 "$ramdisk_dir/sptm.vresearch1.release.img4" "SPTM" || true
+    info "  Sending irecovery command: firmware (SPTM)"
+    irecovery -c firmware 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
 
-    if [[ -z "$ramdisk" ]]; then
-        # Parse BuildManifest.plist from the extracted IPSW to resolve the path
-        local build_manifest
-        build_manifest="$(find "$WORK_DIR/firmware" -maxdepth 3 -name "BuildManifest.plist" 2>/dev/null | head -1)"
-        if [[ -n "$build_manifest" ]]; then
-            local manifest_dir
-            manifest_dir="$(dirname "$build_manifest")"
-            # Extract RestoreRamDisk path via Python plistlib (available everywhere on macOS)
-            local rd_rel
-            rd_rel="$(python3 - "$build_manifest" 2>/dev/null <<'PYEOF'
-import sys, plistlib, pathlib
-with open(sys.argv[1], "rb") as f:
-    m = plistlib.load(f)
-for identity in m.get("BuildIdentities", []):
-    rd = identity.get("Manifest", {}).get("RestoreRamDisk", {})
-    path = rd.get("Info", {}).get("Path", "")
-    if path:
-        print(path)
-        sys.exit(0)
-PYEOF
-)"
-            if [[ -n "$rd_rel" ]]; then
-                local rd_candidate="$manifest_dir/$rd_rel"
-                [[ -f "$rd_candidate" ]] && ramdisk="$rd_candidate"
-            fi
-        fi
-    fi
+    # ── Step 4: TXM ──────────────────────────────────────────────────────────
+    _send_img4 "$ramdisk_dir/txm.img4" "TXM" || true
+    info "  Sending irecovery command: firmware (TXM)"
+    irecovery -c firmware 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
 
-    if [[ -n "$ramdisk" ]]; then
-        info "  Sending ramdisk: $(basename "$ramdisk")..."
-        irecovery -f "$ramdisk" 2>&1 | tee -a "$CURRENT_LOG_FILE" || warn "  ramdisk send returned non-zero"
-        sleep 2
-    else
-        warn "  RestoreRamDisk not found under $WORK_DIR/firmware"
-        warn "  (checked by name and via BuildManifest.plist)"
-    fi
+    # ── Step 5: trustcache ────────────────────────────────────────────────────
+    _send_img4 "$ramdisk_dir/trustcache.img4" "trustcache" || true
+    info "  Sending irecovery command: firmware (trustcache)"
+    irecovery -c firmware 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
 
-    # Step 6: boot
-    info "  Sending boot command..."
-    irecovery -s "bootx" 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
+    # ── Step 6: ramdisk ───────────────────────────────────────────────────────
+    sleep 2
+    _send_img4 "$ramdisk_dir/ramdisk.img4" "ramdisk" || return 1
+    sleep 2
+    info "  Sending irecovery command: ramdisk"
+    irecovery -c ramdisk 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
+
+    # ── Step 7: DeviceTree ────────────────────────────────────────────────────
+    _send_img4 "$ramdisk_dir/DeviceTree.vphone600ap.img4" "DeviceTree" || true
+    info "  Sending irecovery command: devicetree"
+    irecovery -c devicetree 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
+
+    # ── Step 8: SEP ───────────────────────────────────────────────────────────
+    _send_img4 "$ramdisk_dir/sep-firmware.vresearch101.RELEASE.img4" "SEP" || true
+    info "  Sending irecovery command: firmware (SEP)"
+    irecovery -c firmware 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
+
+    # ── Step 9: kernelcache → bootx ───────────────────────────────────────────
+    _send_img4 "$ramdisk_dir/krnl.img4" "kernelcache" || return 1
+    info "  Sending irecovery command: bootx"
+    irecovery -c bootx 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
+
+    success "Boot chain loaded — device is booting ramdisk..."
 }
 
 _load_bootchain_supertart() {
