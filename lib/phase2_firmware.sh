@@ -26,7 +26,7 @@ run_phase2_firmware() {
     elif check_command ipsw; then
         info "Looking up latest iPhone17,3 IPSW..."
         local ipsw_url
-        ipsw_url="$(ipsw download ipsw --device iPhone17,3 --latest --url 2>/dev/null | head -1)"
+        ipsw_url="$(ipsw download ipsw --device iPhone17,3 --latest --urls 2>/dev/null | head -1)"
         if [[ -n "$ipsw_url" ]]; then
             IPHONE_IPSW_URL="$ipsw_url"
             info "Found: $ipsw_url"
