@@ -36,20 +36,23 @@ SUPER_TART_WRITEUP_REPO="https://github.com/wh1te4ever/super-tart-vphone-writeup
 # Firmware Configuration
 # =============================================================================
 # PCC (Private Cloud Compute) release for research VM
-PCC_RELEASE="35622"
+# NOTE: Upstream (vphone-cli) pairs iOS 26.3 (23D127) with CloudOS 26.1 (23B85).
+# CLOUDOS_IPSW_URL below is pinned to 26.1 — do NOT use pccvre latest (gives 26.3
+# which breaks fw_patch.py / txm.py).  Update both together when upstream bumps.
+PCC_RELEASE="35622"  # 26.3 — NOT used when CLOUDOS_IPSW_URL is set
 PCC_INSTANCE_NAME="pcc-research"
 PCC_VARIANT="research"
 
 # iPhone 16 (iPhone17,3) iOS IPSW
 # Leave empty — Phase 2 auto-detects via `ipsw` tool (installed in Phase 1).
 # Only set manually if auto-detection fails:
+# Upstream-tested: iPhone17,3_26.3_23D127_Restore.ipsw
 IPHONE_IPSW_URL=""
 
-# cloudOS/PCC IPSW — NOT auto-detected; you likely need to provide this.
-# Option A: Install pccvre from https://security.apple.com/pcc and the script
-#           will use it automatically to download the release.
-# Option B: Set the URL directly here:
-CLOUDOS_IPSW_URL=""
+# cloudOS/PCC IPSW — pinned to CloudOS 26.1 (23B85) matching upstream vphone-cli.
+# This URL is the exact version fw_patch.py and txm.py were written/verified for.
+# To override with pccvre: clear this and set PCC_RELEASE to the desired release.
+CLOUDOS_IPSW_URL="https://updates.cdn-apple.com/private-cloud-compute/399b664dd623358c3de118ffc114e42dcd51c9309e751d43bc949b98f4e31349"
 
 # Device identifiers
 DEVICE_BOARD_CONFIG="vphone600ap"
