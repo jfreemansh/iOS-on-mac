@@ -2,8 +2,8 @@
 # lib/common.sh — Shared utilities for iOS virtualization setup
 # Provides logging, error handling, colored output, and helper functions.
 
-# Prevent double-sourcing
-[[ -n "$_COMMON_SH_LOADED" ]] && return 0
+# Prevent double-sourcing (use :- default to avoid unbound variable under set -u)
+[[ -n "${_COMMON_SH_LOADED:-}" ]] && return 0
 _COMMON_SH_LOADED=1
 
 # =============================================================================
@@ -237,7 +237,7 @@ register_pid() {
 
 # Kill all registered background processes
 cleanup_pids() {
-    for pid in "${BACKGROUND_PIDS[@]}"; do
+    for pid in "${BACKGROUND_PIDS[@]+"${BACKGROUND_PIDS[@]}"}"; do
         if kill -0 "$pid" 2>/dev/null; then
             kill "$pid" 2>/dev/null
             wait "$pid" 2>/dev/null
