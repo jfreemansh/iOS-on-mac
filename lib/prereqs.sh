@@ -20,14 +20,14 @@ run_phase_prereqs() {
         local major_version="${macos_version%%.*}"
         if [[ "$major_version" -ge 15 ]]; then
             results+=("PASS|macOS version|$macos_version (>= 15.0 required)")
-            ((pass_count++))
+            pass_count=$((pass_count + 1))
         else
             results+=("FAIL|macOS version|$macos_version (need >= 15.0 Sequoia)")
-            ((fail_count++))
+            fail_count=$((fail_count + 1))
         fi
     else
         results+=("FAIL|Operating System|$(uname) (macOS required)")
-        ((fail_count++))
+        fail_count=$((fail_count + 1))
     fi
 
     # -------------------------------------------------------------------------
@@ -38,10 +38,10 @@ run_phase_prereqs() {
     arch="$(uname -m)"
     if [[ "$arch" == "arm64" ]]; then
         results+=("PASS|CPU Architecture|$arch (Apple Silicon)")
-        ((pass_count++))
+        pass_count=$((pass_count + 1))
     else
         results+=("FAIL|CPU Architecture|$arch (arm64 required)")
-        ((fail_count++))
+        fail_count=$((fail_count + 1))
     fi
 
     # -------------------------------------------------------------------------
@@ -52,10 +52,10 @@ run_phase_prereqs() {
     sip_status="$(csrutil status 2>/dev/null || echo 'unknown')"
     if echo "$sip_status" | grep -qi "disabled"; then
         results+=("PASS|SIP (System Integrity Protection)|Disabled")
-        ((pass_count++))
+        pass_count=$((pass_count + 1))
     else
         results+=("FAIL|SIP (System Integrity Protection)|Enabled — must be disabled")
-        ((fail_count++))
+        fail_count=$((fail_count + 1))
     fi
 
     # -------------------------------------------------------------------------
@@ -65,17 +65,17 @@ run_phase_prereqs() {
     # Research guests status is part of csrutil output on supported macOS versions
     if echo "$sip_status" | grep -qi "allow-research-guests.*enabled\|research.*enabled"; then
         results+=("PASS|Research Guests|Enabled")
-        ((pass_count++))
+        pass_count=$((pass_count + 1))
     else
         # On macOS 26+ this might be in a different format; check nvram too
         local nvram_args
         nvram_args="$(nvram boot-args 2>/dev/null || echo '')"
         if echo "$nvram_args" | grep -q "allow-research-guests"; then
             results+=("PASS|Research Guests|Enabled (via nvram)")
-            ((pass_count++))
+            pass_count=$((pass_count + 1))
         else
             results+=("WARN|Research Guests|Unknown/Not confirmed — may need enabling")
-            ((warn_count++))
+            warn_count=$((warn_count + 1))
         fi
     fi
 
@@ -87,10 +87,10 @@ run_phase_prereqs() {
     boot_args="$(nvram boot-args 2>/dev/null || echo '')"
     if echo "$boot_args" | grep -q "amfi_get_out_of_my_way=1"; then
         results+=("PASS|AMFI|Disabled (amfi_get_out_of_my_way=1)")
-        ((pass_count++))
+        pass_count=$((pass_count + 1))
     else
         results+=("FAIL|AMFI|Not disabled — required for unsigned code")
-        ((fail_count++))
+        fail_count=$((fail_count + 1))
     fi
 
     # -------------------------------------------------------------------------
@@ -101,10 +101,10 @@ run_phase_prereqs() {
         local xcode_path
         xcode_path="$(xcode-select -p)"
         results+=("PASS|Xcode CLT|$xcode_path")
-        ((pass_count++))
+        pass_count=$((pass_count + 1))
     else
         results+=("FAIL|Xcode CLT|Not installed")
-        ((fail_count++))
+        fail_count=$((fail_count + 1))
     fi
 
     # -------------------------------------------------------------------------
@@ -115,10 +115,10 @@ run_phase_prereqs() {
         local brew_version
         brew_version="$(brew --version 2>/dev/null | head -1)"
         results+=("PASS|Homebrew|$brew_version")
-        ((pass_count++))
+        pass_count=$((pass_count + 1))
     else
         results+=("FAIL|Homebrew|Not installed")
-        ((fail_count++))
+        fail_count=$((fail_count + 1))
     fi
 
     # -------------------------------------------------------------------------
@@ -133,13 +133,13 @@ run_phase_prereqs() {
     fi
     if [[ -n "$available_gb" ]] && [[ "$available_gb" -ge 100 ]]; then
         results+=("PASS|Disk Space|${available_gb}GB available (>= 100GB recommended)")
-        ((pass_count++))
+        pass_count=$((pass_count + 1))
     elif [[ -n "$available_gb" ]] && [[ "$available_gb" -ge 50 ]]; then
         results+=("WARN|Disk Space|${available_gb}GB available (100GB+ recommended, 50GB minimum)")
-        ((warn_count++))
+        warn_count=$((warn_count + 1))
     else
         results+=("FAIL|Disk Space|${available_gb:-?}GB available (need at least 50GB)")
-        ((fail_count++))
+        fail_count=$((fail_count + 1))
     fi
 
     # -------------------------------------------------------------------------
@@ -148,10 +148,10 @@ run_phase_prereqs() {
     step 9 "Checking Rosetta 2 (required for keystone-engine)..."
     if /usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null; then
         results+=("PASS|Rosetta 2|Installed")
-        ((pass_count++))
+        pass_count=$((pass_count + 1))
     else
         results+=("WARN|Rosetta 2|Not installed — will be installed in Phase 1")
-        ((warn_count++))
+        warn_count=$((warn_count + 1))
     fi
 
     # -------------------------------------------------------------------------

@@ -121,12 +121,10 @@ run_phase2_firmware() {
     info "Scanning iPhone firmware for $iphone_boardconfig components..."
 
     # Find iBSS, iBEC, kernelcache, devicetree, ramdisk, trustcache
-    local -A iphone_files=()
     for component in iBSS iBEC kernelcache DeviceTree RestoreRamDisk StaticTrustCache; do
         local found
         found="$(find "$iphone_extract_dir" -iname "*${component}*" 2>/dev/null | head -1)"
         if [[ -n "$found" ]]; then
-            iphone_files[$component]="$found"
             success "  Found $component: $(basename "$found")"
         else
             warn "  $component not found in iPhone IPSW"

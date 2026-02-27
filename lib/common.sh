@@ -10,15 +10,15 @@ _COMMON_SH_LOADED=1
 # Colors (disabled if not a terminal)
 # =============================================================================
 if [[ -t 1 ]]; then
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    YELLOW='\033[0;33m'
-    BLUE='\033[0;34m'
-    MAGENTA='\033[0;35m'
-    CYAN='\033[0;36m'
-    BOLD='\033[1m'
-    DIM='\033[2m'
-    RESET='\033[0m'
+    RED=$'\033[0;31m'
+    GREEN=$'\033[0;32m'
+    YELLOW=$'\033[0;33m'
+    BLUE=$'\033[0;34m'
+    MAGENTA=$'\033[0;35m'
+    CYAN=$'\033[0;36m'
+    BOLD=$'\033[1m'
+    DIM=$'\033[2m'
+    RESET=$'\033[0m'
 else
     RED='' GREEN='' YELLOW='' BLUE='' MAGENTA='' CYAN='' BOLD='' DIM='' RESET=''
 fi
@@ -115,7 +115,9 @@ prompt_yes_no() {
     echo -e "${BOLD}${BLUE}>> $question $prompt_str${RESET} "
     read -r answer
     answer="${answer:-$default}"
-    [[ "${answer,,}" == "y" || "${answer,,}" == "yes" ]]
+    local answer_lower
+    answer_lower="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
+    [[ "$answer_lower" == "y" || "$answer_lower" == "yes" ]]
 }
 
 # Print a manual action required box
@@ -196,12 +198,21 @@ is_phase_complete() {
     local current_state
     current_state="$(load_state)"
     # Phase is complete if state file shows a later phase
-    local -A phase_order=(
-        [prereqs]=0 [phase1]=1 [phase2]=2 [phase3]=3
-        [phase4]=4 [phase5]=5 [phase6]=6 [phase7]=7
-    )
-    local current_num="${phase_order[$current_state]:-0}"
-    local check_num="${phase_order[$phase]:-99}"
+    local current_num check_num
+    case "$current_state" in
+        prereqs) current_num=0 ;; phase1) current_num=1 ;;
+        phase2)  current_num=2 ;; phase3) current_num=3 ;;
+        phase4)  current_num=4 ;; phase5) current_num=5 ;;
+        phase6)  current_num=6 ;; phase7) current_num=7 ;;
+        *)       current_num=0 ;;
+    esac
+    case "$phase" in
+        prereqs) check_num=0 ;; phase1) check_num=1 ;;
+        phase2)  check_num=2 ;; phase3) check_num=3 ;;
+        phase4)  check_num=4 ;; phase5) check_num=5 ;;
+        phase6)  check_num=6 ;; phase7) check_num=7 ;;
+        *)       check_num=99 ;;
+    esac
     [[ "$current_num" -gt "$check_num" ]]
 }
 

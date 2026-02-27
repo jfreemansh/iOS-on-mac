@@ -49,7 +49,7 @@ run_phase4_patch() {
     section "Extracting IMG4 payloads"
 
     # Find firmware components in both iPhone and cloudOS extracts
-    local -A fw_files=()
+    local fw_iBSS="" fw_iBEC="" fw_kernelcache="" fw_DeviceTree="" fw_StaticTrustCache=""
 
     _find_fw_component() {
         local name="$1"
@@ -67,7 +67,10 @@ run_phase4_patch() {
             found="$(_find_fw_component "$component" "$IPHONE_EXTRACT")"
         fi
         if [[ -n "$found" ]]; then
-            fw_files[$component]="$found"
+            case "$component" in
+                iBSS) fw_iBSS="$found" ;;
+                iBEC) fw_iBEC="$found" ;;
+            esac
             info "  $component: $(basename "$found")"
         else
             warn "  $component: not found"
@@ -81,7 +84,11 @@ run_phase4_patch() {
             found="$(_find_fw_component "$component" "$CLOUDOS_EXTRACT")"
         fi
         if [[ -n "$found" ]]; then
-            fw_files[$component]="$found"
+            case "$component" in
+                kernelcache)      fw_kernelcache="$found" ;;
+                DeviceTree)       fw_DeviceTree="$found" ;;
+                StaticTrustCache) fw_StaticTrustCache="$found" ;;
+            esac
             info "  $component: $(basename "$found")"
         else
             warn "  $component: not found"
@@ -89,8 +96,16 @@ run_phase4_patch() {
     done
 
     # Extract raw payloads from IMG4 containers
-    for component in "${!fw_files[@]}"; do
-        local src="${fw_files[$component]}"
+    for component in iBSS iBEC kernelcache DeviceTree StaticTrustCache; do
+        local src
+        case "$component" in
+            iBSS)             src="$fw_iBSS" ;;
+            iBEC)             src="$fw_iBEC" ;;
+            kernelcache)      src="$fw_kernelcache" ;;
+            DeviceTree)       src="$fw_DeviceTree" ;;
+            StaticTrustCache) src="$fw_StaticTrustCache" ;;
+        esac
+        [[ -z "$src" ]] && continue
         local raw="$patch_dir/${component}.raw"
 
         if [[ -f "$raw" ]]; then
@@ -247,7 +262,7 @@ run_phase4_patch() {
     done
 
     # Copy trust cache (unmodified)
-    local tc_file="${fw_files[StaticTrustCache]:-}"
+    local tc_file="$fw_StaticTrustCache"
     if [[ -n "$tc_file" ]] && [[ -f "$tc_file" ]]; then
         cp "$tc_file" "$VM_DIR/"
         info "  Staged: $(basename "$tc_file") (trust cache)"
