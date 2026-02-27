@@ -74,14 +74,22 @@ run_phase1_environment() {
         info "Building img4lib..."
         (
             cd "$img4lib_dir"
-            # img4lib needs lzfse
+            # Clone or repair lzfse dependency
             if [[ ! -d lzfse ]]; then
                 git clone https://github.com/lzfse/lzfse.git
+            elif [[ ! -f lzfse/CMakeLists.txt ]]; then
+                # Incomplete clone (e.g. from a prior root run); redo it
+                rm -rf lzfse
+                git clone https://github.com/lzfse/lzfse.git
             fi
-            (cd lzfse && mkdir -p build && cd build && cmake .. && make -j"$(sysctl -n hw.ncpu)")
+            # Clear stale CMakeCache so cmake -B works cleanly
+            rm -rf lzfse/build
+            (cd lzfse && cmake -B build -S . && cmake --build build --parallel "$(sysctl -n hw.ncpu)")
+            # Locate openssl (Homebrew puts headers in a non-default prefix)
+            openssl_prefix="$(_brew --prefix openssl@3 2>/dev/null || _brew --prefix openssl 2>/dev/null || echo /opt/homebrew/opt/openssl@3)"
             make -j"$(sysctl -n hw.ncpu)" \
-                CFLAGS="-Ilzfse/src -Iinclude" \
-                LDFLAGS="-Llzfse/build"
+                CFLAGS="-DLZFSE -I. -Ilzfse/src -Iinclude -I${openssl_prefix}/include" \
+                LDFLAGS="-Llzfse/build -L${openssl_prefix}/lib"
         )
         if [[ -f "$img4lib_dir/img4" ]]; then
             success "img4lib built successfully"
