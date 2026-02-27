@@ -282,21 +282,71 @@ _merge_cloudos_firmware() {
 
     touch "$stamp"
 
-    # Verify key vresearch101/vphone600 variants are now present
-    local found_ibss found_kc
-    found_ibss="$(find "$iphone_dir/Firmware/dfu" \
-        \( -name "*vresearch101*iBSS*" -o -name "*iBSS*vresearch101*" \) 2>/dev/null | head -1)"
-    found_kc="$(find "$iphone_dir" -maxdepth 1 -name "kernelcache.research.vphone600" 2>/dev/null | head -1)"
+    # -------------------------------------------------------------------------
+    # Create vresearch101/vphone600 compatibility symlinks so fw_patch.py can
+    # find the expected filenames.  pccvre-downloaded IPSWs use board-config
+    # naming (iBSS.d47.RESEARCH_RELEASE.im4p, kernelcache.research.iphone17)
+    # while fw_patch.py hardcodes:
+    #   Firmware/dfu/iBSS.vresearch101.RELEASE.im4p
+    #   Firmware/dfu/iBEC.vresearch101.RELEASE.im4p
+    #   Firmware/all_flash/LLB.vresearch101.RELEASE.im4p
+    #   kernelcache.research.vphone600
+    # -------------------------------------------------------------------------
+    info "  Creating vresearch101/vphone600 compatibility symlinks..."
 
-    if [[ -n "$found_ibss" ]]; then
-        success "  vresearch101 iBSS: $(basename "$found_ibss")"
-    else
-        warn "  vresearch101 iBSS NOT found after merge — cloudOS IPSW may be missing dfu/ dir"
-    fi
-    if [[ -n "$found_kc" ]]; then
-        success "  kernelcache.research.vphone600 found"
-    else
-        warn "  kernelcache.research.vphone600 NOT found — check cloudOS IPSW"
+    # Helper: symlink $target -> $src (basename) if target absent and src exists
+    _ln_compat() {
+        local src="$1" target="$2"
+        [[ -e "$target" ]] && return 0   # already present
+        [[ -f "$src" ]]   || return 0   # source not found, skip silently
+        ln -sf "$(basename "$src")" "$target"
+        info "    $(basename "$target") -> $(basename "$src")"
+    }
+
+    local dfu_dir="$iphone_dir/Firmware/dfu"
+    local all_flash_dir="$iphone_dir/Firmware/all_flash"
+
+    # iBSS: prefer RESEARCH_RELEASE, fall back to any other variant
+    local ibss_src
+    ibss_src="$(find "$dfu_dir" -maxdepth 1 -name 'iBSS.*.im4p' \
+        ! -name '*.plist' ! -name '*vresearch101*' 2>/dev/null | head -1)"
+    _ln_compat "$ibss_src" "$dfu_dir/iBSS.vresearch101.RELEASE.im4p"
+
+    # iBEC: prefer RELEASE variant (strip the .plist sidecar)
+    local ibec_src
+    ibec_src="$(find "$dfu_dir" -maxdepth 1 -name 'iBEC.*.im4p' \
+        ! -name '*.plist' ! -name '*vresearch101*' 2>/dev/null | head -1)"
+    _ln_compat "$ibec_src" "$dfu_dir/iBEC.vresearch101.RELEASE.im4p"
+
+    # LLB: all_flash/
+    local llb_src
+    llb_src="$(find "$all_flash_dir" -maxdepth 1 -name 'LLB.*.im4p' \
+        ! -name '*.plist' ! -name '*vresearch101*' 2>/dev/null | head -1)"
+    _ln_compat "$llb_src" "$all_flash_dir/LLB.vresearch101.RELEASE.im4p"
+
+    # kernelcache: map any kernelcache.research.* to the vphone600 name
+    local kc_src
+    kc_src="$(find "$iphone_dir" -maxdepth 1 -name 'kernelcache.research.*' \
+        ! -name '*vphone600*' 2>/dev/null | head -1)"
+    _ln_compat "$kc_src" "$iphone_dir/kernelcache.research.vphone600"
+
+    # Verify the four files fw_patch.py requires are now present
+    local -i _missing=0
+    for _f in \
+        "$dfu_dir/iBSS.vresearch101.RELEASE.im4p" \
+        "$dfu_dir/iBEC.vresearch101.RELEASE.im4p" \
+        "$all_flash_dir/LLB.vresearch101.RELEASE.im4p" \
+        "$iphone_dir/Firmware/txm.iphoneos.research.im4p" \
+        "$iphone_dir/kernelcache.research.vphone600"; do
+        if [[ -e "$_f" ]]; then
+            success "  Found: $(basename "$_f")"
+        else
+            warn "  Missing: $_f"
+            (( _missing++ )) || true
+        fi
+    done
+    if [[ $_missing -gt 0 ]]; then
+        warn "  $_missing fw_patch.py component(s) missing — patching will fail"
     fi
 }
 

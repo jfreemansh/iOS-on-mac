@@ -34,6 +34,9 @@ run_phase1_environment() {
         p7zip
         libirecovery
         keystone          # C assembler library; setup_venv.sh builds libkeystone.dylib from it
+        autoconf          # required by setup_libimobiledevice.sh
+        automake          # required by setup_libimobiledevice.sh
+        libtool           # required by setup_libimobiledevice.sh
     )
 
     for pkg in "${brew_packages[@]}"; do
