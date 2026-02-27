@@ -78,14 +78,21 @@ run_phase5_ramdisk() {
     section "Loading patched boot chain"
 
     # The boot chain loading depends on the tool
+    local _bootchain_rc=0
     case "$VM_APPROACH" in
         vphone-cli)
-            _load_bootchain_vphone "$vm_tool" "$vm_name"
+            _load_bootchain_vphone "$vm_tool" "$vm_name" || _bootchain_rc=$?
             ;;
         super-tart)
-            _load_bootchain_supertart "$vm_tool" "$vm_name"
+            _load_bootchain_supertart "$vm_tool" "$vm_name" || _bootchain_rc=$?
             ;;
     esac
+    if [[ $_bootchain_rc -ne 0 ]]; then
+        error "Boot chain loading failed — cannot proceed to SSH wait."
+        kill "$dfu_pid" 2>/dev/null; wait "$dfu_pid" 2>/dev/null
+        error "Check $VM_DIR/serial.log for details."
+        return 1
+    fi
 
     # -------------------------------------------------------------------------
     # 4. Wait for SSH ramdisk to become available

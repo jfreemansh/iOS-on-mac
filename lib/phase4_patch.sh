@@ -152,26 +152,36 @@ _fetch_shsh_blobs() {
 
     if [[ ! -f "$VM_DISK" ]]; then
         info "  Creating sparse VM disk image (${VM_DISK_SIZE:-64g})..."
-        # Use dd with seek to create a sparse file; APFS/HFS+ won't allocate
-        # physical blocks for the holes, so this only uses ~0 bytes on disk.
-        local _sectors
-        _sectors="$(( ${VM_DISK_SIZE:-64} * 2097152 ))"   # default 64g = sectors
+        # Use Python os.ftruncate to create a proper sparse raw disk image.
+        # dd count=0 does NOT work on macOS (APFS allocates a 4096-byte stub),
+        # and DiskImages2 rejects that stub with "sparseimage format not supported".
+        # os.ftruncate issues a single ftruncate(2) syscall; APFS creates a true
+        # sparse file with no physical block allocation.
+        local _size_bytes
         case "${VM_DISK_SIZE:-64g}" in
-            *g) _gb="${VM_DISK_SIZE//g/}" ; _sectors=$(( _gb * 2097152 )) ;;
-            *m) _mb="${VM_DISK_SIZE//m/}" ; _sectors=$(( _mb * 2048 ))    ;;
-            *)  _sectors=$(( 64 * 2097152 )) ;;
+            *g) _size_bytes=$(( ${VM_DISK_SIZE//g/} * 1024 * 1024 * 1024 )) ;;
+            *m) _size_bytes=$(( ${VM_DISK_SIZE//m/} * 1024 * 1024 ))        ;;
+            *)  _size_bytes=$(( 64 * 1024 * 1024 * 1024 ))                  ;;
         esac
-        dd if=/dev/zero of="$VM_DISK" bs=512 count=0 seek="$_sectors" 2>/dev/null || {
+        "${VENV_PYTHON:-python3}" -c "
+import os, sys
+path = sys.argv[1]; size = int(sys.argv[2])
+fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o644)
+os.ftruncate(fd, size)
+os.close(fd)
+print(f'  Sparse disk: {size // (1024**3)} GB at {path}')
+" "$VM_DISK" "$_size_bytes" || {
             warn "  Could not create disk image at $VM_DISK"
             return 1
         }
         info "  Sparse disk created: $VM_DISK"
     fi
 
-    if [[ ! -f "$VM_DIR/SEPStorage" ]]; then
-        info "  Creating SEP storage (64 MB)..."
-        dd if=/dev/zero of="$VM_DIR/SEPStorage" bs=1m count=64 2>/dev/null || true
-    fi
+    # SEPStorage: DO NOT pre-create — vphone-cli's Virtualization.framework
+    # initialises the SEP storage file itself (512 KB with proper format).
+    # Pre-creating it with zeros (even 64 MB) causes:
+    #   VZErrorDomain Code=2 "The coprocessor configuration is invalid."
+    # Just ensure the directory exists; vphone-cli will create the file.
 
     if [[ ! -f "$VM_NVRAM" ]]; then
         touch "$VM_NVRAM"
@@ -287,29 +297,67 @@ _merge_cloudos_firmware() {
         local dst_sub="$iphone_dir/Firmware/$sub"
         if [[ -d "$src_sub" ]]; then
             mkdir -p "$dst_sub"
-            # -n = don't overwrite iPhone originals; they may be newer
-            cp -n "$src_sub"/* "$dst_sub"/ 2>/dev/null || true
+            # Force-copy (no -n): cloudOS variants must overwrite iPhone originals.
+            # Upstream fw_prepare.sh uses plain `cp` here for the same reason.
+            cp "$src_sub"/* "$dst_sub"/ 2>/dev/null || true
             info "  Merged Firmware/$sub/ ($(ls "$src_sub" | wc -l | tr -d ' ') files)"
         fi
     done
 
     # Firmware/*.im4p at the Firmware/ root (e.g. txm.iphoneos.research.im4p)
+    # Force-copy: cloudOS TXM binary is different from the iPhone one and
+    # fw_patch.py's txm.py was written against the cloudOS variant.  Using -n
+    # kept the iPhone TXM in place, causing "binary search pattern not found".
     if ls "$cloudos_dir/Firmware/"*.im4p &>/dev/null 2>&1; then
         mkdir -p "$iphone_dir/Firmware"
-        cp -n "$cloudos_dir/Firmware/"*.im4p "$iphone_dir/Firmware"/ 2>/dev/null || true
-        info "  Merged Firmware/*.im4p"
+        cp "$cloudos_dir/Firmware/"*.im4p "$iphone_dir/Firmware"/ 2>/dev/null || true
+        info "  Merged Firmware/*.im4p (cloudOS variants override iPhone originals)"
     fi
 
     # kernelcache.* files at the IPSW root (e.g. kernelcache.research.vphone600)
     if ls "$cloudos_dir"/kernelcache.* &>/dev/null 2>&1; then
-        cp -n "$cloudos_dir"/kernelcache.* "$iphone_dir"/ 2>/dev/null || true
+        cp "$cloudos_dir"/kernelcache.* "$iphone_dir"/ 2>/dev/null || true
         info "  Merged kernelcache.*"
     fi
 
-    # .dmg files (-n = don't overwrite iPhone's restore DMGs)
+    # .dmg and .dmg.trustcache files — keep iPhone originals if present (-n)
     if ls "$cloudos_dir"/*.dmg &>/dev/null 2>&1; then
         cp -n "$cloudos_dir"/*.dmg "$iphone_dir"/ 2>/dev/null || true
         info "  Merged *.dmg"
+    fi
+    if ls "$cloudos_dir/Firmware/"*.dmg.trustcache &>/dev/null 2>&1; then
+        cp -n "$cloudos_dir/Firmware/"*.dmg.trustcache "$iphone_dir/Firmware"/ 2>/dev/null || true
+    fi
+
+    # -------------------------------------------------------------------------
+    # Generate hybrid BuildManifest.plist + Restore.plist via fw_manifest.py.
+    # Without this, BuildManifest.plist only contains real iPhone identities and
+    # idevicerestore refuses: "not suitable for the current device" because
+    # vresearch101ap / BDID 0x90 is absent.
+    # Upstream fw_prepare.sh does this immediately after the copy step.
+    # -------------------------------------------------------------------------
+    local scripts_dir="$WORK_DIR/tools/vphone-cli/scripts"
+    if [[ -f "$scripts_dir/fw_manifest.py" ]]; then
+        info "  Generating hybrid BuildManifest.plist (fw_manifest.py)..."
+        # Always ensure fw_manifest.py reads the original iPhone manifest, not
+        # a previously-generated hybrid.  On first run we back it up; on
+        # subsequent repatch runs we restore from the backup first.
+        if [[ -f "$iphone_dir/BuildManifest-iPhone.plist" ]]; then
+            cp "$iphone_dir/BuildManifest-iPhone.plist" "$iphone_dir/BuildManifest.plist"
+        else
+            cp "$iphone_dir/BuildManifest.plist" "$iphone_dir/BuildManifest-iPhone.plist"
+        fi
+        "${VENV_PYTHON:-python3}" "$scripts_dir/fw_manifest.py" \
+            "$iphone_dir" "$cloudos_dir" \
+            2>&1 | tee -a "${CURRENT_LOG_FILE:-/dev/null}"
+        if [[ -f "$iphone_dir/BuildManifest.plist" ]]; then
+            success "  Hybrid BuildManifest.plist generated"
+        else
+            warn "  fw_manifest.py did not produce BuildManifest.plist"
+        fi
+    else
+        warn "  fw_manifest.py not found — idevicerestore may refuse vresearch101ap device"
+        warn "  Update vphone-cli: git -C $WORK_DIR/tools/vphone-cli pull"
     fi
 
     touch "$stamp"

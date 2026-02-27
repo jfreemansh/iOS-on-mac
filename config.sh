@@ -45,8 +45,10 @@ PCC_VARIANT="research"
 
 # iPhone 16 (iPhone17,3) iOS IPSW
 # Leave empty — Phase 2 auto-detects via `ipsw` tool (installed in Phase 1).
-# Only set manually if auto-detection fails:
-# Upstream-tested: iPhone17,3_26.3_23D127_Restore.ipsw
+# Only set manually if auto-detection fails.
+# Upstream-tested pairs (both work with CloudOS 26.1/23B85):
+#   iPhone17,3_26.1_23B85_Restore.ipsw  (exact match with CloudOS build)
+#   iPhone17,3_26.3_23D127_Restore.ipsw (also confirmed working)
 IPHONE_IPSW_URL=""
 
 # cloudOS/PCC IPSW — pinned to CloudOS 26.1 (23B85) matching upstream vphone-cli.
