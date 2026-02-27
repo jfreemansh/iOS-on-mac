@@ -234,8 +234,12 @@ _load_bootchain_vphone() {
     # transitions USB modes immediately after iBSS and irecovery must connect
     # again right away.  ramdisk_send.sh has the exact timings correct.
 
+    # vphone-cli binary is at: <repo>/.build/<arch>/release/vphone-cli
+    # Go up 3 levels to reach the repo root.
+    local vphone_bin
+    vphone_bin="$(_find_vm_tool vphone-cli)"
     local vphone_dir
-    vphone_dir="$(dirname "$(dirname "$(_find_vm_tool vphone-cli)")")"
+    vphone_dir="$(dirname "$(dirname "$(dirname "$(dirname "$vphone_bin")")")")"
 
     local ramdisk_dir="$WORK_DIR/Ramdisk"
     if [[ ! -d "$ramdisk_dir" ]]; then
