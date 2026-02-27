@@ -37,6 +37,7 @@ REQUESTED_PHASE=""
 RESUME=false
 OPT_RESET=false
 CHECK_ONLY=false
+FORCE_REPATCH=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -56,6 +57,10 @@ while [[ $# -gt 0 ]]; do
             CHECK_ONLY=true
             shift
             ;;
+        --repatch)
+            FORCE_REPATCH=true
+            shift
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -64,6 +69,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --resume, -r      Resume from last completed phase"
             echo "  --reset           Clear saved state and start over"
             echo "  --check, -c       Run prerequisites check only"
+            echo "  --repatch         Delete stale patched firmware and re-run Phase 4 from scratch"
             echo "  --help, -h        Show this help"
             echo ""
             echo "Phases:"
@@ -106,6 +112,19 @@ echo ""
 if $OPT_RESET; then
     clear_state
     info "State cleared. Starting fresh."
+fi
+
+# Export FORCE_REPATCH (0/1) so phase4 can read it as an environment variable
+if $FORCE_REPATCH; then
+    export FORCE_REPATCH=1
+else
+    export FORCE_REPATCH=0
+fi
+
+# --repatch implies starting at phase 4 (unless a specific phase was requested)
+if $FORCE_REPATCH && [[ -z "$REQUESTED_PHASE" ]]; then
+    REQUESTED_PHASE=4
+    info "--repatch: will re-run Phase 4 (firmware patching) from scratch"
 fi
 
 # =============================================================================

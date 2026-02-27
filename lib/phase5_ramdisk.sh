@@ -265,7 +265,11 @@ _load_bootchain_vphone() {
     if [[ -f "$ibss" ]]; then
         info "  Sending iBSS..."
         irecovery -f "$ibss" 2>&1 | tee -a "$CURRENT_LOG_FILE" || warn "  iBSS send returned non-zero"
-        # Device re-enumerates; wait before the next irecovery call
+        # Hard lead-time: the VM must actually execute iBSS before it can
+        # re-enumerate over USB — polling immediately will always miss it.
+        info "  Sleeping 10s for iBSS VM execution..."
+        sleep 10
+        # Device re-enumerates; poll until irecovery sees the new device.
         _irecovery_wait "post-iBSS (iBSS/Recovery mode)" 30
     else
         warn "  iBSS not found in $patched_dir"
@@ -278,6 +282,9 @@ _load_bootchain_vphone() {
     if [[ -f "$ibec" ]]; then
         info "  Sending iBEC..."
         irecovery -f "$ibec" 2>&1 | tee -a "$CURRENT_LOG_FILE" || warn "  iBEC send returned non-zero"
+        # Hard lead-time before polling
+        info "  Sleeping 10s for iBEC VM execution..."
+        sleep 10
         # Device re-enumerates again into recovery (iBEC) mode
         _irecovery_wait "post-iBEC (Recovery mode)" 30
     else

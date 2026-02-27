@@ -19,6 +19,14 @@ run_phase4_patch() {
     local patch_dir="$WORK_DIR/patched"
     ensure_dir "$patch_dir"
 
+    # --repatch flag: wipe all previously patched/repacked files so everything
+    # is rebuilt from the original extracted payloads.
+    if [[ "${FORCE_REPATCH:-0}" == "1" ]]; then
+        info "--repatch: removing stale patched files..."
+        rm -f "$patch_dir"/*.patched "$patch_dir"/*.img4 "$patch_dir"/*.raw
+        success "Stale patched files removed — will re-patch from scratch"
+    fi
+
     # -------------------------------------------------------------------------
     # 1. Prepare patching tools
     # -------------------------------------------------------------------------
@@ -38,10 +46,19 @@ run_phase4_patch() {
     local kairos_bin=""
     if check_command kairos; then
         kairos_bin="kairos"
+    elif [[ -f "$WORK_DIR/tools/kairos/kairos" ]]; then
+        # Phase 1 builds kairos in the repo root (plain Makefile, no build/ subdir)
+        kairos_bin="$WORK_DIR/tools/kairos/kairos"
     elif [[ -f "$WORK_DIR/tools/kairos/build/kairos" ]]; then
         kairos_bin="$WORK_DIR/tools/kairos/build/kairos"
     fi
-    [[ -n "$kairos_bin" ]] && info "kairos binary: $kairos_bin"
+
+    if [[ -z "$kairos_bin" ]]; then
+        error "kairos not found — iBSS/iBEC patching requires kairos."
+        error "Run Phase 1 first to build it: ./setup.sh --phase 1"
+        return 1
+    fi
+    info "kairos binary: $kairos_bin"
 
     # -------------------------------------------------------------------------
     # 2. Extract raw firmware payloads from IMG4 containers
