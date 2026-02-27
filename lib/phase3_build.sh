@@ -91,6 +91,63 @@ _build_vphone_cli() {
     ln -sf "$vphone_bin" "$WORK_DIR/tools/vphone-cli-bin"
     export PATH="$(dirname "$vphone_bin"):$PATH"
     info "vphone-cli added to PATH"
+
+    # Build the patched libimobiledevice stack.
+    # setup_libimobiledevice.sh compiles libirecovery with the PCC VM patch
+    # that registers iPhone99,11/vresearch101ap (USB PID 0xFE01) so that
+    # idevicerestore -t can communicate with the virtual DFU device.
+    # Required for the automatic SHSH blob fetch in Phase 4.
+    _build_libimobiledevice || \
+        warn "libimobiledevice build failed — SHSH auto-fetch in Phase 4 will be skipped"
+}
+
+# =============================================================================
+# Patched libimobiledevice stack (idevicerestore + PCC VM patch)
+# =============================================================================
+# Runs vphone-cli/scripts/setup_libimobiledevice.sh which builds:
+#   OpenSSL → libplist → libusbmuxd → libtatsu → libimobiledevice
+#   → libirecovery+PCC-patch → libzip → idevicerestore
+# all into vphone-cli/.limd/.  The PCC patch adds the iPhone99,11/vresearch101ap
+# entry to libirecovery's device table so the virtual DFU USB device (PID 0xFE01)
+# is recognised — stock Homebrew idevicerestore will not work.
+_build_libimobiledevice() {
+    local vphone_dir="$WORK_DIR/tools/vphone-cli"
+    local limd_bin="$vphone_dir/.limd/bin/idevicerestore"
+    local setup_script="$vphone_dir/scripts/setup_libimobiledevice.sh"
+
+    if [[ -x "$limd_bin" ]]; then
+        info "Patched idevicerestore already present: $limd_bin"
+        return 0
+    fi
+
+    if [[ ! -f "$setup_script" ]]; then
+        warn "setup_libimobiledevice.sh not found at $setup_script"
+        warn "Update vphone-cli:  git -C $vphone_dir pull"
+        return 1
+    fi
+
+    section "Building patched libimobiledevice + idevicerestore"
+    info "  Compiling: OpenSSL, libplist, libusbmuxd, libtatsu, libimobiledevice,"
+    info "             libirecovery (+ PCC VM patch), libzip, idevicerestore"
+    info "  Output:    $vphone_dir/.limd/"
+    info "  This takes 5–15 minutes on first run."
+
+    (
+        cd "$vphone_dir/scripts"
+        bash setup_libimobiledevice.sh 2>&1 | tee -a "$CURRENT_LOG_FILE"
+    )
+    local rc=$?
+    if [[ $rc -ne 0 ]]; then
+        error "setup_libimobiledevice.sh failed (exit $rc)"
+        error "Check logs: $CURRENT_LOG_FILE"
+        return 1
+    fi
+
+    if [[ ! -x "$limd_bin" ]]; then
+        error "setup_libimobiledevice.sh exited 0 but $limd_bin not found"
+        return 1
+    fi
+    success "Patched idevicerestore built: $limd_bin"
 }
 
 # =============================================================================

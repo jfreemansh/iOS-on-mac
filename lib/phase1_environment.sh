@@ -1,6 +1,6 @@
 #!/bin/bash
 # lib/phase1_environment.sh — Install required tools for iOS virtualization
-# Installs: ipsw, img4lib, ldid2, keystone-engine (Rosetta), Python venv
+# Installs: ipsw, img4lib, ldid2, keystone (brew C library), Python venv via upstream setup_venv.sh
 
 run_phase1_environment() {
     phase_banner "1" "Environment Setup"
@@ -33,6 +33,7 @@ run_phase1_environment() {
         unzip
         p7zip
         libirecovery
+        keystone          # C assembler library; setup_venv.sh builds libkeystone.dylib from it
     )
 
     for pkg in "${brew_packages[@]}"; do
@@ -140,60 +141,19 @@ run_phase1_environment() {
     fi
 
     # -------------------------------------------------------------------------
-    # 6. Python patching tools — fw_patch.py / ramdisk_build.py dependencies
+    # 6. Python patching tools — venv built by setup_venv.sh in Phase 4
     # -------------------------------------------------------------------------
-    section "Installing Python patching tools (native arm64)"
+    section "Python patching tools prerequisite check"
 
-    # The firmware and ramdisk patchers (patchers/iboot.py, patchers/kernel.py,
-    # patchers/txm.py, fw_patch.py, ramdisk_build.py) run under native arm64
-    # python3 and require three packages:
-    #   keystone-engine  — assembler for iBoot/kernel patches
-    #   capstone         — disassembler used by KernelPatcher
-    #   pyimg4           — IMG4 container r/w; also installs the `pyimg4` CLI
-    #                      that ramdisk_build.py calls via subprocess
-    local _pip_packages=("keystone-engine" "capstone" "pyimg4")
-    local _missing_packages=()
-    for _pkg in "${_pip_packages[@]}"; do
-        local _mod="${_pkg//-/_}"
-        [[ "$_mod" == "keystone_engine" ]] && _mod="keystone"
-        if ! python3 -c "import $_mod" &>/dev/null; then
-            _missing_packages+=("$_pkg")
-        fi
-    done
-
-    if [[ ${#_missing_packages[@]} -eq 0 ]]; then
-        info "Python patching tools already installed"
+    # In Phase 4, _verify_python_patching_tools() runs the upstream
+    # setup_venv.sh which creates vphone-cli/.venv and builds libkeystone.dylib
+    # from the Homebrew static library.  The brew 'keystone' package (installed
+    # above) is the only Phase 1 prerequisite; pip3 is NOT used for patching.
+    if brew list keystone &>/dev/null 2>&1; then
+        info "Homebrew keystone present — setup_venv.sh will build libkeystone.dylib in Phase 4"
     else
-        info "Installing: ${_missing_packages[*]}"
-        if ! python3 -m pip install --quiet "${_missing_packages[@]}" 2>/dev/null; then
-            run_or_fail "pip3 install patching tools" pip3 install "${_missing_packages[@]}"
-        fi
-        success "Python patching tools installed"
+        warn "Homebrew keystone not installed — Phase 4 will attempt to install it"
     fi
-
-    # Ensure the pyimg4 CLI binary is reachable on PATH.
-    # pip installs user-local scripts to ~/Library/Python/X.Y/bin on macOS
-    # which is not always on PATH by default.
-    if ! check_command pyimg4; then
-        local _user_bin
-        _user_bin="$(python3 -m site --user-base 2>/dev/null)/bin"
-        if [[ -x "$_user_bin/pyimg4" ]]; then
-            export PATH="$_user_bin:$PATH"
-            info "Added $_user_bin to PATH (pyimg4 CLI)"
-        else
-            local _found_pyimg4
-            _found_pyimg4="$(find /opt/homebrew/bin /usr/local/bin "$HOME/Library" \
-                -name pyimg4 -type f 2>/dev/null | head -1)"
-            if [[ -n "$_found_pyimg4" ]]; then
-                export PATH="$(dirname "$_found_pyimg4"):$PATH"
-                info "Found pyimg4 at: $_found_pyimg4"
-            else
-                warn "pyimg4 CLI not found on PATH — ramdisk signing may fail."
-                warn "Run: python3 -m pip install pyimg4  and add the bin dir to PATH"
-            fi
-        fi
-    fi
-    check_command pyimg4 && info "pyimg4 CLI: $(command -v pyimg4)"
 
     # -------------------------------------------------------------------------
     # 7. SHSH blobs directory
@@ -226,7 +186,7 @@ run_phase1_environment() {
     # -------------------------------------------------------------------------
     echo ""
     section "Environment Summary"
-    local tools=("ipsw" "img4" "ldid" "sshpass" "cmake" "ninja" "jq" "wget" "irecovery" "pyimg4")
+    local tools=("ipsw" "img4" "ldid" "sshpass" "cmake" "ninja" "jq" "wget" "irecovery")
     for tool in "${tools[@]}"; do
         if check_command "$tool"; then
             success "  $tool: $(command -v "$tool")"
@@ -235,14 +195,12 @@ run_phase1_environment() {
         fi
     done
 
-    # Python patching packages
-    for _mod in keystone capstone pyimg4; do
-        if python3 -c "import $_mod" &>/dev/null; then
-            success "  python3/$_mod: OK"
-        else
-            warn "  python3/$_mod: NOT INSTALLED"
-        fi
-    done
+    # Python patching venv is built by setup_venv.sh in Phase 4
+    if brew list keystone &>/dev/null 2>&1; then
+        success "  brew/keystone: $(brew --prefix keystone 2>/dev/null)/lib/libkeystone.a"
+    else
+        warn "  brew/keystone: NOT INSTALLED (required for Phase 4)"
+    fi
 
     save_state "phase1"
     success "Phase 1 complete — environment is ready."

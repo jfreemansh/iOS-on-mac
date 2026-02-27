@@ -26,26 +26,15 @@ run_phase4_patch() {
     fi
 
     # -------------------------------------------------------------------------
-    # 0. SHSH blob pre-flight check
-    #    ramdisk_build.py requires SHSH blobs to sign the IMG4 ramdisk images.
-    #    Warn early so the user can supply them before the long patching steps.
+    # 0. SHSH blobs — fetch automatically via idevicerestore -t if not present
     # -------------------------------------------------------------------------
     ensure_dir "$WORK_DIR/shsh"
     if [[ -z "$(ls -A "$WORK_DIR/shsh" 2>/dev/null)" ]]; then
-        warn "======================================================================"
-        warn "  SHSH BLOB REQUIRED — $WORK_DIR/shsh/ is empty"
-        warn "======================================================================"
-        warn "  ramdisk_build.py cannot sign the ramdisk without a saved SHSH blob."
-        warn ""
-        warn "  To obtain blobs, run ONE of the following:"
-        warn "    ipsw download appledb --device iPhone15,2 --version <iOS version>"
-        warn "    OR save blobs from a running vphone VM with blobsaver/tsschecker"
-        warn ""
-        warn "  Copy the resulting .shsh/.shsh2 file to:"
-        warn "    $WORK_DIR/shsh/"
-        warn ""
-        warn "  Patching will continue, but the ramdisk build step will be skipped."
-        warn "======================================================================"
+        section "Fetching SHSH blobs"
+        _fetch_shsh_blobs || {
+            warn "SHSH auto-fetch failed — ramdisk build step will be skipped."
+            warn "Place a .shsh/.shsh2 file in $WORK_DIR/shsh/ and re-run with --repatch."
+        }
     else
         info "SHSH blobs: $(ls "$WORK_DIR/shsh/" | tr '\n' ' ')"
     fi
@@ -92,6 +81,148 @@ run_phase4_patch() {
 
     save_state "phase4"
     success "Phase 4 complete — firmware patched and ramdisk staged."
+}
+
+# =============================================================================
+# SHSH blob auto-fetch
+# Boots the VM in DFU mode, uses the patched idevicerestore -t to request the
+# TSS ticket (SHSH blob) from Apple's signing server, then kills the DFU boot.
+# Requires: patched idevicerestore built by Phase 3 (_build_libimobiledevice),
+#           VM ROM files from Virtualization.framework, and VM_DISK to exist.
+# =============================================================================
+_fetch_shsh_blobs() {
+    local vphone_dir="$WORK_DIR/tools/vphone-cli"
+    local idevicerestore="$vphone_dir/.limd/bin/idevicerestore"
+
+    # ---- Prerequisites ----
+    if [[ ! -x "$idevicerestore" ]]; then
+        warn "Patched idevicerestore not found at $idevicerestore"
+        warn "Re-run Phase 3 to build the patched libimobiledevice stack."
+        return 1
+    fi
+
+    local vphone_bin
+    vphone_bin="$(find "$vphone_dir/.build" -name "vphone-cli" -type f \
+        ! -path "*dSYM*" ! -path "*/debug/*" 2>/dev/null | head -1)"
+    if [[ -z "$vphone_bin" ]] || [[ ! -x "$vphone_bin" ]]; then
+        warn "vphone-cli binary not found — cannot start DFU boot for SHSH fetch."
+        return 1
+    fi
+
+    if [[ ! -f "$VM_ROM_PATH" ]]; then
+        warn "AVPBooter ROM not found at $VM_ROM_PATH"
+        warn "Requires a macOS build that ships the vresearch1 ROM."
+        return 1
+    fi
+
+    if [[ ! -f "$VM_SEP_ROM_PATH" ]]; then
+        warn "SEP ROM not found at $VM_SEP_ROM_PATH"
+        return 1
+    fi
+
+    # Check restore dir symlink exists (created earlier in run_phase4_patch)
+    if [[ ! -e "$WORK_DIR/iphone_Restore" ]]; then
+        warn "iphone_Restore symlink not found — firmware merge may not have run yet."
+        return 1
+    fi
+
+    # ---- Ensure minimal VM runtime files exist for DFU boot ----
+    ensure_dir "$VM_DIR"
+
+    if [[ ! -f "$VM_DISK" ]]; then
+        info "  Creating sparse VM disk image (${VM_DISK_SIZE:-64g})..."
+        # Use dd with seek to create a sparse file; APFS/HFS+ won't allocate
+        # physical blocks for the holes, so this only uses ~0 bytes on disk.
+        local _sectors
+        _sectors="$(( ${VM_DISK_SIZE:-64} * 2097152 ))"   # default 64g = sectors
+        case "${VM_DISK_SIZE:-64g}" in
+            *g) _gb="${VM_DISK_SIZE//g/}" ; _sectors=$(( _gb * 2097152 )) ;;
+            *m) _mb="${VM_DISK_SIZE//m/}" ; _sectors=$(( _mb * 2048 ))    ;;
+            *)  _sectors=$(( 64 * 2097152 )) ;;
+        esac
+        dd if=/dev/zero of="$VM_DISK" bs=512 count=0 seek="$_sectors" 2>/dev/null || {
+            warn "  Could not create disk image at $VM_DISK"
+            return 1
+        }
+        info "  Sparse disk created: $VM_DISK"
+    fi
+
+    if [[ ! -f "$VM_DIR/SEPStorage" ]]; then
+        info "  Creating SEP storage (64 MB)..."
+        dd if=/dev/zero of="$VM_DIR/SEPStorage" bs=1m count=64 2>/dev/null || true
+    fi
+
+    if [[ ! -f "$VM_NVRAM" ]]; then
+        touch "$VM_NVRAM"
+    fi
+
+    # ---- Boot VM in DFU mode ----
+    info "  Starting VM in DFU mode (PID will be killed after SHSH fetch)..."
+    "$vphone_bin" \
+        --rom    "$VM_ROM_PATH"       \
+        --disk   "$VM_DISK"           \
+        --nvram  "$VM_NVRAM"          \
+        --cpu    "${VM_CPU:-4}"       \
+        --memory "${VM_MEMORY:-8192}" \
+        --serial-log "$VM_DIR/serial_shsh.log" \
+        --stop-on-panic --stop-on-fatal-error \
+        --sep-rom     "$VM_SEP_ROM_PATH"   \
+        --sep-storage "$VM_DIR/SEPStorage" \
+        --no-graphics --dfu &>/dev/null &
+    local dfu_pid=$!
+    register_pid "$dfu_pid"
+    info "  DFU boot PID: $dfu_pid"
+
+    # ---- Wait for DFU device to enumerate on USB (up to 60s) ----
+    info "  Waiting for DFU device to appear on USB..."
+    local dfu_ready=false
+    for _i in $(seq 1 30); do
+        if irecovery -q 2>/dev/null | grep -qi "DFU\|Recovery\|CPID"; then
+            dfu_ready=true
+            break
+        fi
+        sleep 2
+    done
+
+    if ! $dfu_ready; then
+        warn "  DFU device did not enumerate after 60s."
+        kill "$dfu_pid" 2>/dev/null; wait "$dfu_pid" 2>/dev/null
+        warn "  Check $VM_DIR/serial_shsh.log for boot errors."
+        return 1
+    fi
+    success "  DFU device detected."
+
+    # ---- Fetch SHSH blob (TSS ticket only, no actual restore) ----
+    # Run from $WORK_DIR so idevicerestore writes shsh/ to $WORK_DIR/shsh/.
+    # ./iphone_Restore is the symlink created earlier pointing at $IPHONE_EXTRACT.
+    info "  Fetching SHSH blob via idevicerestore -t ..."
+    (
+        cd "$WORK_DIR"
+        "$idevicerestore" -e -y ./iphone_Restore -t 2>&1 | tee -a "$CURRENT_LOG_FILE"
+    )
+    local rc=$?
+
+    # ---- Kill DFU boot ----
+    kill "$dfu_pid" 2>/dev/null
+    wait "$dfu_pid" 2>/dev/null
+
+    if [[ $rc -ne 0 ]]; then
+        warn "  idevicerestore -t exited $rc — check $CURRENT_LOG_FILE"
+        return 1
+    fi
+
+    # ---- Verify output ----
+    local blob_count
+    blob_count="$(find "$WORK_DIR/shsh" \( -name "*.shsh" -o -name "*.shsh2" \) \
+        2>/dev/null | wc -l | tr -d ' ')"
+    if [[ "$blob_count" -gt 0 ]]; then
+        success "  SHSH blob(s) saved ($blob_count):"
+        find "$WORK_DIR/shsh" \( -name "*.shsh" -o -name "*.shsh2" \) | \
+            while read -r f; do info "    $(basename "$f")"; done
+    else
+        warn "  idevicerestore -t completed but no .shsh/.shsh2 found in $WORK_DIR/shsh/"
+        return 1
+    fi
 }
 
 # =============================================================================
@@ -170,10 +301,17 @@ _merge_cloudos_firmware() {
 }
 
 # =============================================================================
-# Python dependency check
+# Python dependency check — uses upstream setup_venv.sh
+# setup_venv.sh creates PROJECT_ROOT/.venv, installs pip packages, then
+# builds libkeystone.dylib from Homebrew's static libkeystone.a and injects
+# it into the venv so that keystone-engine can load it at runtime.
+# Sets the global VENV_PYTHON used by _run_fw_patch_py and _build_ramdisk_upstream.
 # =============================================================================
 _verify_python_patching_tools() {
     local scripts_dir="$WORK_DIR/tools/vphone-cli/scripts"
+    local venv_dir="$WORK_DIR/tools/vphone-cli/.venv"
+    # Export so callers can use this Python for all script invocations
+    VENV_PYTHON="$venv_dir/bin/python3"
 
     if [[ ! -d "$scripts_dir" ]]; then
         error "vphone-cli scripts not found at $scripts_dir"
@@ -185,23 +323,54 @@ _verify_python_patching_tools() {
         error "Update vphone-cli:  git -C $WORK_DIR/tools/vphone-cli pull"
         return 1
     fi
-
-    # keystone-engine installs as module 'keystone', capstone stays 'capstone'
-    local pip_pkgs=()
-    python3 -c "import keystone" 2>/dev/null  || pip_pkgs+=("keystone-engine")
-    python3 -c "import capstone" 2>/dev/null  || pip_pkgs+=("capstone")
-    python3 -c "import pyimg4"   2>/dev/null  || pip_pkgs+=("pyimg4")
-
-    if [[ ${#pip_pkgs[@]} -gt 0 ]]; then
-        info "Installing missing Python packages: ${pip_pkgs[*]}"
-        pip3 install "${pip_pkgs[@]}" 2>&1 | tee -a "$CURRENT_LOG_FILE" || {
-            error "pip3 install failed.  Run manually:"
-            error "  pip3 install keystone-engine capstone pyimg4"
-            return 1
-        }
+    if [[ ! -f "$scripts_dir/setup_venv.sh" ]]; then
+        error "setup_venv.sh not found in $scripts_dir"
+        error "Update vphone-cli:  git -C $WORK_DIR/tools/vphone-cli pull"
+        return 1
     fi
 
-    success "Python patching dependencies satisfied ($scripts_dir)"
+    # Check whether the venv is already set up and all imports work.
+    # keystone-engine needs libkeystone.dylib which setup_venv.sh builds from brew.
+    local _needs_setup=false
+    if [[ ! -x "$VENV_PYTHON" ]]; then
+        _needs_setup=true
+    elif ! "$VENV_PYTHON" -c "import keystone, capstone, pyimg4" &>/dev/null 2>&1; then
+        _needs_setup=true
+    fi
+
+    if $_needs_setup; then
+        # Ensure the brew C library is present before setup_venv.sh tries to build the dylib
+        if ! brew list keystone &>/dev/null 2>&1; then
+            info "Installing Homebrew keystone (required by setup_venv.sh)..."
+            brew install keystone 2>&1 | tee -a "$CURRENT_LOG_FILE" || {
+                error "Failed to install keystone via Homebrew."
+                return 1
+            }
+        fi
+
+        info "Running setup_venv.sh to build venv + libkeystone.dylib..."
+        (
+            cd "$scripts_dir"
+            bash setup_venv.sh 2>&1 | tee -a "$CURRENT_LOG_FILE"
+        )
+        local rc=$?
+        if [[ $rc -ne 0 ]]; then
+            error "setup_venv.sh failed (exit code $rc)"
+            error "Check logs: $CURRENT_LOG_FILE"
+            return 1
+        fi
+    fi
+
+    # Final verification
+    if ! "$VENV_PYTHON" -c "import keystone, capstone, pyimg4" 2>/dev/null; then
+        error "Python imports still failing after setup_venv.sh"
+        error "  venv python: $VENV_PYTHON"
+        error "  Run manually: cd $scripts_dir && bash setup_venv.sh"
+        return 1
+    fi
+
+    success "Python patching venv ready: $venv_dir"
+    "$VENV_PYTHON" -c "import keystone, capstone, pyimg4; print('  keystone / capstone / pyimg4: OK')"
 }
 
 # =============================================================================
@@ -237,7 +406,7 @@ _run_fw_patch_py() {
     info "Running fw_patch.py with vm_dir=$WORK_DIR ..."
     (
         cd "$scripts_dir"
-        python3 fw_patch.py "$WORK_DIR" 2>&1 | tee -a "$CURRENT_LOG_FILE"
+        "${VENV_PYTHON:-python3}" fw_patch.py "$WORK_DIR" 2>&1 | tee -a "$CURRENT_LOG_FILE"
     )
     local rc=$?
     if [[ $rc -ne 0 ]]; then
@@ -299,7 +468,7 @@ _build_ramdisk_upstream() {
     info "Running ramdisk_build.py with vm_dir=$WORK_DIR ..."
     (
         cd "$scripts_dir"
-        python3 ramdisk_build.py "$WORK_DIR" 2>&1 | tee -a "$CURRENT_LOG_FILE"
+        "${VENV_PYTHON:-python3}" ramdisk_build.py "$WORK_DIR" 2>&1 | tee -a "$CURRENT_LOG_FILE"
     )
     local rc=$?
     if [[ $rc -ne 0 ]]; then
