@@ -185,20 +185,19 @@ run_phase1_environment() {
         fi
         if [[ -d "$kairos_dir" ]]; then
             info "Building kairos..."
+            # kairos uses a plain Makefile (no CMake); binary lands in the repo root
             (
                 cd "$kairos_dir"
-                cmake -B build -G Ninja
-                cmake --build build
+                make -j"$(sysctl -n hw.ncpu)"
             ) 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
-            if [[ -f "$kairos_dir/build/kairos" ]]; then
+            if [[ -f "$kairos_dir/kairos" ]]; then
                 success "kairos built successfully"
             else
                 warn "kairos build failed — will fall back to manual patching"
             fi
         fi
     fi
-    [[ -f "$kairos_dir/kairos" || -f "$kairos_dir/build/kairos" ]] && \
-        export PATH="$kairos_dir/build:$kairos_dir:$PATH"
+    [[ -f "$kairos_dir/kairos" ]] && export PATH="$kairos_dir:$PATH"
 
     # -------------------------------------------------------------------------
     # 8. sshpass (for automated SSH to ramdisk)
@@ -216,7 +215,7 @@ run_phase1_environment() {
     # -------------------------------------------------------------------------
     echo ""
     section "Environment Summary"
-    local tools=("ipsw" "img4" "ldid" "sshpass" "cmake" "ninja" "jq" "wget")
+    local tools=("ipsw" "img4" "ldid" "sshpass" "cmake" "ninja" "jq" "wget" "irecovery")
     for tool in "${tools[@]}"; do
         if check_command "$tool"; then
             success "  $tool: $(command -v "$tool")"
