@@ -169,11 +169,11 @@ run_phase2_firmware() {
     # 5. Save firmware paths for later phases
     # -------------------------------------------------------------------------
     cat > "$WORK_DIR/.firmware_paths" << PATHS
-IPHONE_IPSW=$iphone_ipsw
-IPHONE_EXTRACT=$iphone_extract_dir
-CLOUDOS_IPSW=$cloudos_ipsw
-CLOUDOS_EXTRACT=$cloudos_extract_dir
-ROOTFS_DMG=${rootfs_dmg:-}
+IPHONE_IPSW="$iphone_ipsw"
+IPHONE_EXTRACT="$iphone_extract_dir"
+CLOUDOS_IPSW="$cloudos_ipsw"
+CLOUDOS_EXTRACT="$cloudos_extract_dir"
+ROOTFS_DMG="${rootfs_dmg:-}"
 PATHS
     success "Firmware paths saved to $WORK_DIR/.firmware_paths"
 

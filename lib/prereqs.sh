@@ -5,6 +5,9 @@
 run_phase_prereqs() {
     phase_banner "0" "Prerequisites Check"
 
+    ensure_dir "$LOG_DIR"
+    CURRENT_LOG_FILE="$LOG_DIR/phase0.log"
+
     local pass_count=0
     local fail_count=0
     local warn_count=0

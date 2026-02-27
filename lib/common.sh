@@ -263,6 +263,43 @@ setup_cleanup_trap() {
 }
 
 # =============================================================================
+# VM Tool Lookup (shared by phase5 and phase7)
+# =============================================================================
+
+# Find the VM tool binary by name; echoes path and returns 0, or returns 1
+_find_vm_tool() {
+    local name="$1"
+
+    # Check PATH first
+    if check_command "$name"; then
+        command -v "$name"
+        return 0
+    fi
+
+    # Search build directories under $WORK_DIR/tools
+    local build_bin
+    build_bin="$(find "$WORK_DIR/tools" -name "$name" -type f -perm +111 2>/dev/null | head -1)"
+    if [[ -n "$build_bin" ]]; then
+        echo "$build_bin"
+        return 0
+    fi
+
+    # Check well-known fixed locations
+    local loc
+    for loc in \
+        "$WORK_DIR/tools/${name}-bin" \
+        "$WORK_DIR/tools/${name}" \
+        "$WORK_DIR/tools/${name}/build/${name}"; do
+        if [[ -x "$loc" ]]; then
+            echo "$loc"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# =============================================================================
 # Download Helpers
 # =============================================================================
 

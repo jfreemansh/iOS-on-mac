@@ -156,7 +156,7 @@ run_phase1_environment() {
                 cd "$kairos_dir"
                 cmake -B build -G Ninja
                 cmake --build build
-            ) 2>&1 | tee -a "$CURRENT_LOG_FILE"
+            ) 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
             if [[ -f "$kairos_dir/build/kairos" ]]; then
                 success "kairos built successfully"
             else

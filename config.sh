@@ -18,7 +18,6 @@ VM_APPROACH="vphone-cli"
 # =============================================================================
 # Directory Layout
 # =============================================================================
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK_DIR="${WORK_DIR:-$HOME/ios-vm}"  # Main working directory
 VM_DIR="$WORK_DIR/VM"                 # VM runtime files (ROM, disk, nvram)
 DOWNLOADS_DIR="$WORK_DIR/downloads"   # Cached firmware downloads

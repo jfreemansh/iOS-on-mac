@@ -14,10 +14,10 @@ run_phase7_boot() {
 
     case "$VM_APPROACH" in
         vphone-cli)
-            vm_tool="$(_find_vm_tool_p7 "vphone-cli")"
+            vm_tool="$(_find_vm_tool "vphone-cli")"
             ;;
         super-tart)
-            vm_tool="$(_find_vm_tool_p7 "tart")"
+            vm_tool="$(_find_vm_tool "tart")"
             ;;
     esac
 
@@ -87,7 +87,7 @@ run_phase7_boot() {
             break
         fi
 
-        if (( attempt % 15 == 0 )); then
+        if [[ $(( attempt % 15 )) -eq 0 ]]; then
             info "  Still waiting for boot... (${attempt}s / 180s)"
         fi
         sleep 2
@@ -153,30 +153,3 @@ run_phase7_boot() {
     wait "$vm_pid" 2>/dev/null || true
 }
 
-# =============================================================================
-# Helper (duplicated to avoid dependency on phase5)
-# =============================================================================
-
-_find_vm_tool_p7() {
-    local name="$1"
-
-    if check_command "$name"; then
-        command -v "$name"
-        return 0
-    fi
-
-    local build_bin
-    build_bin="$(find "$WORK_DIR/tools" -name "$name" -type f -perm +111 2>/dev/null | head -1)"
-    if [[ -n "$build_bin" ]]; then
-        echo "$build_bin"
-        return 0
-    fi
-
-    local link="$WORK_DIR/tools/${name}-bin"
-    if [[ -x "$link" ]]; then
-        echo "$link"
-        return 0
-    fi
-
-    return 1
-}

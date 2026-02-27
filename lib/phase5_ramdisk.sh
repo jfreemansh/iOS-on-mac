@@ -96,14 +96,15 @@ run_phase5_ramdisk() {
         sleep 2
     done
 
+    local ssh_port
     if [[ -z "$vm_ip" ]] || [[ "$vm_ip" == "0.0.0.0" ]]; then
         warn "Could not get VM IP automatically."
         warn "The VM may use port forwarding instead."
         vm_ip="localhost"
-        local ssh_port="$SSH_LOCAL_PORT"
+        ssh_port="$SSH_LOCAL_PORT"
     else
         info "VM IP: $vm_ip"
-        local ssh_port=22
+        ssh_port=22
     fi
 
     # Save VM IP for later phases
@@ -133,7 +134,7 @@ run_phase5_ramdisk() {
             fi
         fi
 
-        if (( attempt % 10 == 0 )); then
+        if [[ $(( attempt % 10 )) -eq 0 ]]; then
             info "  Still waiting... (attempt $attempt/60)"
         fi
         sleep 2
@@ -166,33 +167,6 @@ run_phase5_ramdisk() {
 # Helpers
 # =============================================================================
 
-_find_vm_tool() {
-    local name="$1"
-    local locations=(
-        "$WORK_DIR/tools/${name}-bin"
-        "$WORK_DIR/tools/${name}"
-    )
-
-    # Search in build directories
-    local build_bin
-    build_bin="$(find "$WORK_DIR/tools" -name "$name" -type f -perm +111 2>/dev/null | head -1)"
-    [[ -n "$build_bin" ]] && locations+=("$build_bin")
-
-    # Check PATH
-    if check_command "$name"; then
-        echo "$(command -v "$name")"
-        return 0
-    fi
-
-    for loc in "${locations[@]}"; do
-        if [[ -x "$loc" ]]; then
-            echo "$loc"
-            return 0
-        fi
-    done
-
-    return 1
-}
 
 _ensure_vm_exists() {
     local vm_tool="$1"
