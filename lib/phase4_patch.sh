@@ -48,6 +48,12 @@ run_phase4_patch() {
     _verify_python_patching_tools
 
     # -------------------------------------------------------------------------
+    # 3b. Apply local fixes to upstream vphone-cli scripts
+    #     (patches that haven't been merged upstream yet)
+    # -------------------------------------------------------------------------
+    _apply_upstream_patches
+
+    # -------------------------------------------------------------------------
     # 4. Run fw_patch.py — patches iBSS, iBEC, LLB, TXM, kernelcache in-place
     # -------------------------------------------------------------------------
     section "Patching firmware (fw_patch.py)"
@@ -447,6 +453,29 @@ _verify_python_patching_tools() {
 
     success "Python patching venv ready: $venv_dir"
     "$VENV_PYTHON" -c "import keystone, capstone, pyimg4; print('  keystone / capstone / pyimg4: OK')"
+}
+
+# =============================================================================
+# Apply local patches to upstream vphone-cli scripts.
+# Called after the venv is confirmed ready so VENV_PYTHON is set.
+# Each patch script is idempotent — safe to re-run.
+# =============================================================================
+_apply_upstream_patches() {
+    local scripts_dir="$WORK_DIR/tools/vphone-cli/scripts"
+    local patches_dir="$(dirname "${BASH_SOURCE[0]}")/../CFW/patches"
+    # Resolve relative path
+    patches_dir="$(cd "$patches_dir" && pwd)"
+
+    # ── txm.py: replace PACIBSP scan-back with ±0x4000 window search ──
+    # Upstream txm.py uses PACIBSP to find function boundaries, which breaks on
+    # CloudOS 26.1 (23B85) due to an inline hint #27 instruction 0x24 bytes
+    # before the marker constant.  fix_txm_patcher.py replaces that logic.
+    local txm_py="$scripts_dir/patchers/txm.py"
+    if [[ -f "$txm_py" ]] && [[ -f "$patches_dir/fix_txm_patcher.py" ]]; then
+        info "  Applying txm.py fix (PACIBSP → window search)..."
+        "${VENV_PYTHON:-python3}" "$patches_dir/fix_txm_patcher.py" "$txm_py" \
+            2>&1 | tee -a "$CURRENT_LOG_FILE"
+    fi
 }
 
 # =============================================================================
