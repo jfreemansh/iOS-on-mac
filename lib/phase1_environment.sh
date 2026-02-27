@@ -84,11 +84,13 @@ run_phase1_environment() {
             fi
             # Clear stale CMakeCache so cmake -B works cleanly
             rm -rf lzfse/build
-            (cd lzfse && cmake -B build -S . && cmake --build build --parallel "$(sysctl -n hw.ncpu)")
+            # -DCMAKE_POLICY_VERSION_MINIMUM=3.5 needed for lzfse's old CMakeLists.txt
+            (cd lzfse && cmake -B build -S . -DCMAKE_POLICY_VERSION_MINIMUM=3.5 && cmake --build build --parallel "$(sysctl -n hw.ncpu)")
             # Locate openssl (Homebrew puts headers in a non-default prefix)
             openssl_prefix="$(_brew --prefix openssl@3 2>/dev/null || _brew --prefix openssl 2>/dev/null || echo /opt/homebrew/opt/openssl@3)"
+            # -DiOS10 enables ep_info/compression fields in TheImg4Payload
             make -j"$(sysctl -n hw.ncpu)" \
-                CFLAGS="-DLZFSE -I. -Ilzfse/src -Iinclude -I${openssl_prefix}/include" \
+                CFLAGS="-DLZFSE -DiOS10 -I. -Ilzfse/src -Iinclude -I${openssl_prefix}/include" \
                 LDFLAGS="-Llzfse/build -L${openssl_prefix}/lib"
         )
         if [[ -f "$img4lib_dir/img4" ]]; then
