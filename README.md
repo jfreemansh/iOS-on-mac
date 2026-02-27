@@ -59,12 +59,10 @@ VM_CPU=8                   # CPU cores for the VM
 VM_MEMORY=16384            # RAM in MB
 ```
 
-If you have a specific IPSW URL, set it:
+**Firmware URLs:**
 
-```bash
-IPHONE_IPSW_URL="https://..."
-CLOUDOS_IPSW_URL="https://..."
-```
+- `IPHONE_IPSW_URL` — leave empty. Phase 2 auto-detects via the `ipsw` tool.
+- `CLOUDOS_IPSW_URL` — you likely need to provide this manually, **or** install Apple's [pccvre](https://security.apple.com/pcc) tool and the script will use it automatically.
 
 ### 2. Run Prerequisites Check
 

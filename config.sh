@@ -41,11 +41,15 @@ PCC_RELEASE="35622"
 PCC_INSTANCE_NAME="pcc-research"
 PCC_VARIANT="research"
 
-# iPhone 16 (iPhone17,3) iOS 26.1 IPSW
-# Leave empty to auto-detect via ipsw tool, or set manually:
+# iPhone 16 (iPhone17,3) iOS IPSW
+# Leave empty — Phase 2 auto-detects via `ipsw` tool (installed in Phase 1).
+# Only set manually if auto-detection fails:
 IPHONE_IPSW_URL=""
 
-# cloudOS/PCC IPSW — typically obtained from pccvre
+# cloudOS/PCC IPSW — NOT auto-detected; you likely need to provide this.
+# Option A: Install pccvre from https://security.apple.com/pcc and the script
+#           will use it automatically to download the release.
+# Option B: Set the URL directly here:
 CLOUDOS_IPSW_URL=""
 
 # Device identifiers
