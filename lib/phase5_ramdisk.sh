@@ -248,7 +248,19 @@ _load_bootchain_vphone() {
         return 1
     fi
 
-    local send_script="$vphone_dir/scripts/ramdisk_send.sh"
+    local send_script
+    # Prefer our VM-specific wrapper (adds post-iBSS sleep for re-enumeration).
+    # Fall back to upstream ramdisk_send.sh if the wrapper is missing.
+    local _wrapper
+    _wrapper="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/CFW/patches/ramdisk_send_vm.sh"
+    if [[ -f "$_wrapper" ]]; then
+        send_script="$_wrapper"
+        info "  Using VM send wrapper: $send_script"
+    else
+        send_script="$vphone_dir/scripts/ramdisk_send.sh"
+        warn "  VM send wrapper missing — using upstream ramdisk_send.sh (may fail on VM)"
+    fi
+
     if [[ ! -f "$send_script" ]]; then
         error "ramdisk_send.sh not found at $send_script"
         error "Update vphone-cli: git -C $vphone_dir pull"
