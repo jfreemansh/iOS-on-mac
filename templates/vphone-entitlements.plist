@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Required for Virtualization.framework private APIs -->
+    <key>com.apple.security.virtualization</key>
+    <true/>
+    <key>com.apple.private.virtualization</key>
+    <true/>
+    <key>com.apple.vm.networking</key>
+    <true/>
+    <key>com.apple.private.hypervisor</key>
+    <true/>
+
+    <!-- Network access -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+
+    <!-- GPU / ParavirtualizedGraphics -->
+    <key>com.apple.private.paravirtualizedgraphics</key>
+    <true/>
+
+    <!-- File access (for VM images) -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+</dict>
+</plist>

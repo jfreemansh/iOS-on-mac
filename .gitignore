@@ -1,0 +1,25 @@
+# Build artifacts and downloaded content
+*.ipsw
+*.dmg
+*.img4
+*.dylib
+
+# Metal plugin source files (downloaded at runtime)
+CFW/libAppleParavirtCompilerPluginIOGPUFamily/main.mm
+CFW/libAppleParavirtCompilerPluginIOGPUFamily/build.sh
+
+# VM runtime
+*.nvram
+*.rom
+*.disk
+
+# Python
+__pycache__/
+*.pyc
+.venv*/
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
