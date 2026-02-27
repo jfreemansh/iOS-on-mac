@@ -121,10 +121,11 @@ else
     export FORCE_REPATCH=0
 fi
 
-# --repatch implies starting at phase 4 (unless a specific phase was requested)
-if $FORCE_REPATCH && [[ -z "$REQUESTED_PHASE" ]]; then
-    REQUESTED_PHASE=4
-    info "--repatch: will re-run Phase 4 (firmware patching) from scratch"
+# --repatch wipes stale patched files then runs from the beginning (phase 0)
+# so prereqs, env checks, etc. all pass before re-patching.
+# An explicit --phase N still overrides this.
+if $FORCE_REPATCH; then
+    info "--repatch: stale patched firmware will be wiped; starting from Phase 0"
 fi
 
 # =============================================================================
