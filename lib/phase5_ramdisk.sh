@@ -234,38 +234,52 @@ _load_bootchain_vphone() {
 
     local patched_dir="$WORK_DIR/patched"
 
-    # Wait for the DFU device to appear (up to 30 s)
-    info "  Waiting for DFU device to appear..."
-    local dfu_found=false
-    for attempt in $(seq 1 15); do
-        if irecovery -q &>/dev/null; then
-            dfu_found=true
-            break
-        fi
-        sleep 2
-    done
-    if ! $dfu_found; then
-        warn "  DFU device not detected by irecovery — sending firmware anyway"
-    fi
+    # -------------------------------------------------------------------------
+    # Helper: poll until irecovery can see a recovery/DFU device (up to ~60 s)
+    # After each DFU stage transition the virtual device re-enumerates over USB
+    # and irecovery needs time to reconnect to the new device identity.
+    # -------------------------------------------------------------------------
+    _irecovery_wait() {
+        local label="$1"
+        local max_attempts="${2:-30}"
+        info "  Waiting for device to re-enumerate ($label)..."
+        local attempt
+        for attempt in $(seq 1 "$max_attempts"); do
+            if irecovery -q &>/dev/null; then
+                info "  Device ready ($label, attempt $attempt)"
+                return 0
+            fi
+            sleep 2
+        done
+        warn "  Device not detected after ${label} — continuing anyway"
+        return 1
+    }
 
-    # Step 1: iBSS  (device re-enters DFU after receiving iBSS)
+    # Step 0: Wait for the initial DFU device to appear
+    _irecovery_wait "initial DFU" 20 || true
+
+    # Step 1: iBSS
+    # After iBSS the device transitions DFU → iBSS mode and re-enumerates.
     local ibss="$patched_dir/iBSS.img4"
     [[ -f "$ibss" ]] || ibss="$patched_dir/iBSS.patched"
     if [[ -f "$ibss" ]]; then
         info "  Sending iBSS..."
         irecovery -f "$ibss" 2>&1 | tee -a "$CURRENT_LOG_FILE" || warn "  iBSS send returned non-zero"
-        sleep 3
+        # Device re-enumerates; wait before the next irecovery call
+        _irecovery_wait "post-iBSS (iBSS/Recovery mode)" 30
     else
         warn "  iBSS not found in $patched_dir"
     fi
 
-    # Step 2: iBEC  (device enters recovery mode)
+    # Step 2: iBEC
+    # After iBEC the device transitions iBSS → iBEC/Recovery mode and re-enumerates.
     local ibec="$patched_dir/iBEC.img4"
     [[ -f "$ibec" ]] || ibec="$patched_dir/iBEC.patched"
     if [[ -f "$ibec" ]]; then
         info "  Sending iBEC..."
         irecovery -f "$ibec" 2>&1 | tee -a "$CURRENT_LOG_FILE" || warn "  iBEC send returned non-zero"
-        sleep 3
+        # Device re-enumerates again into recovery (iBEC) mode
+        _irecovery_wait "post-iBEC (Recovery mode)" 30
     else
         warn "  iBEC not found in $patched_dir"
     fi
@@ -274,6 +288,7 @@ _load_bootchain_vphone() {
     info "  Setting boot-args for ramdisk..."
     irecovery -s "setenv boot-args $BOOT_ARGS_RAMDISK" 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
     irecovery -s "saveenv"                              2>&1 | tee -a "$CURRENT_LOG_FILE" || true
+    sleep 1
 
     # Step 4: kernelcache
     local kc="$patched_dir/kernelcache.img4"
@@ -287,14 +302,46 @@ _load_bootchain_vphone() {
     fi
 
     # Step 5: ramdisk
-    local ramdisk
+    # Modern IPSWs store the ramdisk with a cryptic filename (e.g. 048-xxxxx.dmg).
+    # Try an explicit name match first, then fall back to BuildManifest.plist lookup.
+    local ramdisk=""
     ramdisk="$(find "$WORK_DIR/firmware" -iname "*RestoreRamDisk*" 2>/dev/null | head -1)"
+
+    if [[ -z "$ramdisk" ]]; then
+        # Parse BuildManifest.plist from the extracted IPSW to resolve the path
+        local build_manifest
+        build_manifest="$(find "$WORK_DIR/firmware" -maxdepth 3 -name "BuildManifest.plist" 2>/dev/null | head -1)"
+        if [[ -n "$build_manifest" ]]; then
+            local manifest_dir
+            manifest_dir="$(dirname "$build_manifest")"
+            # Extract RestoreRamDisk path via Python plistlib (available everywhere on macOS)
+            local rd_rel
+            rd_rel="$(python3 - "$build_manifest" 2>/dev/null <<'PYEOF'
+import sys, plistlib, pathlib
+with open(sys.argv[1], "rb") as f:
+    m = plistlib.load(f)
+for identity in m.get("BuildIdentities", []):
+    rd = identity.get("Manifest", {}).get("RestoreRamDisk", {})
+    path = rd.get("Info", {}).get("Path", "")
+    if path:
+        print(path)
+        sys.exit(0)
+PYEOF
+)"
+            if [[ -n "$rd_rel" ]]; then
+                local rd_candidate="$manifest_dir/$rd_rel"
+                [[ -f "$rd_candidate" ]] && ramdisk="$rd_candidate"
+            fi
+        fi
+    fi
+
     if [[ -n "$ramdisk" ]]; then
-        info "  Sending ramdisk..."
+        info "  Sending ramdisk: $(basename "$ramdisk")..."
         irecovery -f "$ramdisk" 2>&1 | tee -a "$CURRENT_LOG_FILE" || warn "  ramdisk send returned non-zero"
         sleep 2
     else
         warn "  RestoreRamDisk not found under $WORK_DIR/firmware"
+        warn "  (checked by name and via BuildManifest.plist)"
     fi
 
     # Step 6: boot

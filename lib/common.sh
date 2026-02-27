@@ -326,7 +326,7 @@ _get_vphone_ip() {
         # Skip the host address (.1) and grab the last assigned guest IP.
         ip="$(awk '
             /\{/  { ip="" }
-            /ip_address/ { ip = $NF }
+            /ip_address/ { split($NF, a, "="); ip = a[2] }
             /\}/ {
                 if (ip != "" && ip != "192.168.64.1") print ip
                 ip=""

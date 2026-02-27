@@ -123,7 +123,14 @@ run_phase_prereqs() {
         results+=("PASS|iOS SDK (Xcode.app)|iOS $ios_sdk_ver at $ios_sdk_path")
         pass_count=$((pass_count + 1))
     else
-        results+=("WARN|iOS SDK (Xcode.app)|Not found — Metal GPU plugin will be skipped. Install Xcode.app and run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer")
+        # Detect if xcrun is blocked by an unaccepted Xcode license
+        local xcrun_err
+        xcrun_err="$(xcrun -sdk iphoneos --show-sdk-path 2>&1 || true)"
+        if echo "$xcrun_err" | grep -qi "license"; then
+            results+=("WARN|iOS SDK (Xcode.app)|Xcode license not accepted — run: sudo xcodebuild -license accept")
+        else
+            results+=("WARN|iOS SDK (Xcode.app)|Not found — Metal GPU plugin will be skipped. Install Xcode.app, accept license (sudo xcodebuild -license accept), and run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer")
+        fi
         warn_count=$((warn_count + 1))
     fi
 
