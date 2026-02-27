@@ -72,7 +72,11 @@ run_phase4_patch() {
         local name="$1"
         local search_dir="$2"
         local result
-        result="$(find "$search_dir" -iname "*${name}*" 2>/dev/null | head -1)"
+        # Prefer .im4p files; explicitly exclude .plist sidecars which share the same base name
+        result="$(find "$search_dir" -iname "*${name}*.im4p" ! -iname "*.plist" 2>/dev/null | head -1)"
+        if [[ -z "$result" ]]; then
+            result="$(find "$search_dir" -iname "*${name}*" ! -iname "*.plist" ! -iname "*.bom" 2>/dev/null | head -1)"
+        fi
         echo "$result"
     }
 
@@ -148,24 +152,28 @@ run_phase4_patch() {
 
     if [[ -f "$ibss_patched" ]]; then
         info "iBSS already patched"
-    elif [[ -f "$ibss_raw" ]]; then
-        if [[ -n "$kairos_bin" ]]; then
-            info "Patching iBSS with kairos..."
-            "$kairos_bin" "$ibss_raw" "$ibss_patched" \
-                -b "$BOOT_ARGS_DFU" 2>&1 | tee -a "$CURRENT_LOG_FILE"
-        else
-            info "Patching iBSS with keystone-engine..."
-            _patch_iboot_with_keystone "$ibss_raw" "$ibss_patched" "iBSS"
-        fi
-
-        if [[ -f "$ibss_patched" ]]; then
-            success "iBSS patched"
-        else
-            error "iBSS patching failed"
-            return 1
-        fi
     else
-        warn "iBSS raw payload not available — skipping"
+        # kairos expects the .im4p container directly — it extracts the payload
+        # internally. Passing an already-extracted raw binary causes a segfault.
+        local ibss_kairos_input="${fw_iBSS:-}"
+        [[ -z "$ibss_kairos_input" ]] && ibss_kairos_input="$ibss_raw"
+
+        if [[ ! -f "$ibss_kairos_input" ]]; then
+            warn "iBSS source not available — skipping"
+        else
+            info "Patching iBSS with kairos (input: $(basename "$ibss_kairos_input"))..."
+            "$kairos_bin" "$ibss_kairos_input" "$ibss_patched" \
+                -b "$BOOT_ARGS_DFU" 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
+
+            if [[ -f "$ibss_patched" ]]; then
+                success "iBSS patched"
+            else
+                error "iBSS patching failed (kairos exited non-zero or produced no output)"
+                error "  Input: $ibss_kairos_input"
+                error "  kairos: $kairos_bin"
+                return 1
+            fi
+        fi
     fi
 
     # -------------------------------------------------------------------------
@@ -178,24 +186,27 @@ run_phase4_patch() {
 
     if [[ -f "$ibec_patched" ]]; then
         info "iBEC already patched"
-    elif [[ -f "$ibec_raw" ]]; then
-        if [[ -n "$kairos_bin" ]]; then
-            info "Patching iBEC with kairos..."
-            "$kairos_bin" "$ibec_raw" "$ibec_patched" \
-                -b "$BOOT_ARGS_RAMDISK" 2>&1 | tee -a "$CURRENT_LOG_FILE"
-        else
-            info "Patching iBEC with keystone-engine..."
-            _patch_iboot_with_keystone "$ibec_raw" "$ibec_patched" "iBEC"
-        fi
-
-        if [[ -f "$ibec_patched" ]]; then
-            success "iBEC patched"
-        else
-            error "iBEC patching failed"
-            return 1
-        fi
     else
-        warn "iBEC raw payload not available — skipping"
+        # kairos expects the .im4p container directly (same as iBSS)
+        local ibec_kairos_input="${fw_iBEC:-}"
+        [[ -z "$ibec_kairos_input" ]] && ibec_kairos_input="$ibec_raw"
+
+        if [[ ! -f "$ibec_kairos_input" ]]; then
+            warn "iBEC source not available — skipping"
+        else
+            info "Patching iBEC with kairos (input: $(basename "$ibec_kairos_input"))..."
+            "$kairos_bin" "$ibec_kairos_input" "$ibec_patched" \
+                -b "$BOOT_ARGS_RAMDISK" 2>&1 | tee -a "$CURRENT_LOG_FILE" || true
+
+            if [[ -f "$ibec_patched" ]]; then
+                success "iBEC patched"
+            else
+                error "iBEC patching failed (kairos exited non-zero or produced no output)"
+                error "  Input: $ibec_kairos_input"
+                error "  kairos: $kairos_bin"
+                return 1
+            fi
+        fi
     fi
 
     # -------------------------------------------------------------------------
