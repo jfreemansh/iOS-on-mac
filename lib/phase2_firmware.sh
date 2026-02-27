@@ -66,14 +66,15 @@ run_phase2_firmware() {
         # Try Apple's PCC Virtual Research Environment tool
         if check_command pccvre; then
             info "Using pccvre to download PCC release $PCC_RELEASE..."
-            pccvre download --release "$PCC_RELEASE" \
-                   --output "$DOWNLOADS_DIR" 2>&1 | tee -a "$CURRENT_LOG_FILE"
+            # pccvre downloads to the current directory; cd into downloads dir
+            (cd "$DOWNLOADS_DIR" && pccvre release download --release "$PCC_RELEASE") \
+                2>&1 | tee -a "$CURRENT_LOG_FILE"
 
-            # Look for the downloaded IPSW
+            # Look for the downloaded IPSW (pccvre may nest it in a subdirectory)
             local pcc_ipsw
-            pcc_ipsw="$(find "$DOWNLOADS_DIR" -name "*.ipsw" -newer "$CURRENT_LOG_FILE" | head -1)"
+            pcc_ipsw="$(find "$DOWNLOADS_DIR" -name "*.ipsw" | head -1)"
             if [[ -n "$pcc_ipsw" ]]; then
-                mv "$pcc_ipsw" "$cloudos_ipsw"
+                [[ "$pcc_ipsw" != "$cloudos_ipsw" ]] && mv "$pcc_ipsw" "$cloudos_ipsw"
                 success "cloudOS IPSW obtained via pccvre"
             fi
         fi
@@ -84,7 +85,7 @@ run_phase2_firmware() {
                 "" \
                 "Option A: Use pccvre (Apple's PCC Virtual Research Environment):" \
                 "  1. Download pccvre from Apple: https://security.apple.com/pcc" \
-                "  2. Run: pccvre download --release $PCC_RELEASE" \
+                "  2. Run: pccvre release download --release $PCC_RELEASE" \
                 "  3. Place the .ipsw at: $cloudos_ipsw" \
                 "" \
                 "Option B: Set CLOUDOS_IPSW_URL in config.sh" \
