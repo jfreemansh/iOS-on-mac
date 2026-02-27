@@ -26,20 +26,6 @@ run_phase4_patch() {
     fi
 
     # -------------------------------------------------------------------------
-    # 0. SHSH blobs — fetch automatically via idevicerestore -t if not present
-    # -------------------------------------------------------------------------
-    ensure_dir "$WORK_DIR/shsh"
-    if [[ -z "$(ls -A "$WORK_DIR/shsh" 2>/dev/null)" ]]; then
-        section "Fetching SHSH blobs"
-        _fetch_shsh_blobs || {
-            warn "SHSH auto-fetch failed — ramdisk build step will be skipped."
-            warn "Place a .shsh/.shsh2 file in $WORK_DIR/shsh/ and re-run with --repatch."
-        }
-    else
-        info "SHSH blobs: $(ls "$WORK_DIR/shsh/" | tr '\n' ' ')"
-    fi
-
-    # -------------------------------------------------------------------------
     # 1. Merge cloudOS firmware into iPhone directory
     # -------------------------------------------------------------------------
     section "Merging cloudOS firmware into iPhone directory"
@@ -68,13 +54,29 @@ run_phase4_patch() {
     _run_fw_patch_py
 
     # -------------------------------------------------------------------------
-    # 5. Build Metal compiler plugin (paravirtualized GPU)
+    # 5. Fetch SHSH blobs (requires patched firmware + DFU boot)
+    #    Done here — after fw_patch.py — matching upstream's order:
+    #    fw_patch → boot_dfu → restore_get_shsh → ramdisk_build
+    # -------------------------------------------------------------------------
+    ensure_dir "$WORK_DIR/shsh"
+    if [[ -z "$(ls -A "$WORK_DIR/shsh" 2>/dev/null)" ]]; then
+        section "Fetching SHSH blobs"
+        _fetch_shsh_blobs || {
+            warn "SHSH auto-fetch failed — ramdisk build step will be skipped."
+            warn "Place a .shsh/.shsh2 file in $WORK_DIR/shsh/ and re-run with --repatch."
+        }
+    else
+        info "SHSH blobs: $(ls "$WORK_DIR/shsh/" | tr '\n' ' ')"
+    fi
+
+    # -------------------------------------------------------------------------
+    # 6. Build Metal compiler plugin (paravirtualized GPU)
     # -------------------------------------------------------------------------
     section "Metal Compiler Plugin (Paravirtualized GPU)"
     _build_metal_plugin
 
     # -------------------------------------------------------------------------
-    # 6. Build SSH ramdisk (ramdisk_build.py → Ramdisk/)
+    # 7. Build SSH ramdisk (ramdisk_build.py → Ramdisk/)
     # -------------------------------------------------------------------------
     section "Building SSH ramdisk"
     _build_ramdisk_upstream
@@ -94,7 +96,20 @@ _fetch_shsh_blobs() {
     local vphone_dir="$WORK_DIR/tools/vphone-cli"
     local idevicerestore="$vphone_dir/.limd/bin/idevicerestore"
 
-    # ---- Prerequisites ----
+    # ---- Prerequisites: SIP / research entitlements check ----
+    # vphone-cli --dfu requires SIP disabled and research guests enabled.
+    # The DFU USB device will never appear if these are not in place.
+    local _sip_status
+    _sip_status="$(csrutil status 2>/dev/null)"
+    if echo "$_sip_status" | grep -qi 'enabled'; then
+        warn "SIP appears to be enabled: $_sip_status"
+        warn "DFU boot requires SIP disabled. Boot Recovery OS and run:"
+        warn "  csrutil disable"
+        warn "  csrutil allow-research-guests enable"
+        return 1
+    fi
+
+    # ---- Prerequisites: idevicerestore + vphone-cli ----
     if [[ ! -x "$idevicerestore" ]]; then
         warn "Patched idevicerestore not found at $idevicerestore"
         warn "Re-run Phase 3 to build the patched libimobiledevice stack."
@@ -174,10 +189,21 @@ _fetch_shsh_blobs() {
     info "  DFU boot PID: $dfu_pid"
 
     # ---- Wait for DFU device to enumerate on USB (up to 60s) ----
+    # Prefer patched irecovery from .limd/bin/ — the stock Homebrew irecovery
+    # does not have the vresearch101ap/0xFE01 entry and will never see the VM.
+    local _irecovery_bin
+    if [[ -x "$vphone_dir/.limd/bin/irecovery" ]]; then
+        _irecovery_bin="$vphone_dir/.limd/bin/irecovery"
+        info "  Using patched irecovery: $_irecovery_bin"
+    else
+        _irecovery_bin="irecovery"
+        warn "  Patched irecovery not available — using stock (may not see virtual device)"
+    fi
+
     info "  Waiting for DFU device to appear on USB..."
     local dfu_ready=false
     for _i in $(seq 1 30); do
-        if irecovery -q 2>/dev/null | grep -qi "DFU\|Recovery\|CPID"; then
+        if "$_irecovery_bin" -q 2>/dev/null | grep -qi "DFU\|Recovery\|CPID"; then
             dfu_ready=true
             break
         fi
