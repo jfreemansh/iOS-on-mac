@@ -44,78 +44,25 @@ run_phase5_ramdisk() {
     success "Restore complete!"
 
     # -------------------------------------------------------------------------
-    # Step B: SSH ramdisk boot (automated with manual fallback)
+    # Step B: SSH ramdisk boot
     # -------------------------------------------------------------------------
     section "Step B: SSH ramdisk boot"
 
-    local ramdisk_wrapper="$SCRIPT_DIR/lib/ramdisk_send_wrapper.sh"
-    local irecovery_bin="$vphone_dir/.limd/bin/irecovery"
-    local dfu_log
-    dfu_log="$(mktemp /tmp/boot_dfu_XXXXXX.log)"
-    local dfu_pid=""
-
-    _cleanup_dfu() {
-        [[ -n "$dfu_pid" ]] && kill "$dfu_pid" 2>/dev/null || true
-        rm -f "$dfu_log"
-    }
-
-    info "Killing any stale vphone-cli processes..."
     pkill -f "vphone-cli" 2>/dev/null || true
     sleep 2
 
-    info "Starting VM in DFU mode (background)..."
-    (
-        cd "$vphone_dir"
-        make boot_dfu VM_DIR="$VM_DIR" CPU="${VM_CPU:-8}" MEMORY="${VM_MEMORY:-16384}"
-    ) >"$dfu_log" 2>&1 &
-    dfu_pid=$!
-    register_pid "$dfu_pid"
+    info "This requires TWO terminals running simultaneously."
+    echo
+    echo "  TERMINAL 1 — start VM in DFU mode:"
+    echo "    cd \"$vphone_dir\" && make boot_dfu VM_DIR=\"$VM_DIR\" CPU=${VM_CPU:-8} MEMORY=${VM_MEMORY:-16384}"
+    echo
+    echo "  TERMINAL 2 — once VM shows 'VM started in DFU mode', send ramdisk:"
+    echo "    cd \"$vphone_dir\" && make ramdisk_send VM_DIR=\"$VM_DIR\""
+    echo
+    echo "  Wait for 'Boot sequence complete'. Leave Terminal 1 running."
+    echo
+    read -r -p "Press ENTER when ramdisk_send is complete: "
 
-    # Wait for DFU ready signal
-    info "Waiting for 'VM started in DFU mode'..."
-    local dfu_ready=false
-    for _i in $(seq 1 60); do
-        if ! kill -0 "$dfu_pid" 2>/dev/null; then
-            warn "boot_dfu process exited early — check $dfu_log"
-            break
-        fi
-        if grep -q "VM started in DFU mode" "$dfu_log" 2>/dev/null; then
-            dfu_ready=true
-            break
-        fi
-        sleep 2
-    done
-
-    local ramdisk_ok=false
-    if $dfu_ready; then
-        success "VM is in DFU mode. Sending ramdisk..."
-        sleep 1
-        if IRECOVERY="$irecovery_bin" zsh "$ramdisk_wrapper" "$VM_DIR/Ramdisk"; then
-            ramdisk_ok=true
-        else
-            warn "ramdisk_send_wrapper failed (exit $?)"
-        fi
-    else
-        warn "DFU ready signal not detected within timeout."
-    fi
-
-    if ! $ramdisk_ok; then
-        # Manual fallback
-        warn "Automated ramdisk send failed. Falling back to manual mode."
-        _cleanup_dfu
-        echo
-        echo "  TERMINAL 1 — start VM in DFU mode:"
-        echo "    cd \"$vphone_dir\" && make boot_dfu VM_DIR=\"$VM_DIR\" CPU=${VM_CPU:-8} MEMORY=${VM_MEMORY:-16384}"
-        echo
-        echo "  TERMINAL 2 — once VM shows 'VM started in DFU mode':"
-        echo "    IRECOVERY=\"$irecovery_bin\" zsh \"$ramdisk_wrapper\" \"$VM_DIR/Ramdisk\""
-        echo
-        echo "  Wait for 'Boot sequence complete'. Leave Terminal 1 running."
-        echo
-        read -r -p "Press ENTER when ramdisk_send is complete: "
-    fi
-
-    rm -f "$dfu_log"
     success "Ramdisk boot chain sent!"
 
     # -------------------------------------------------------------------------
