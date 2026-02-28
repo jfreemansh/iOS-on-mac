@@ -26,10 +26,13 @@ echo "[*] Sending ramdisk from $RAMDISK_DIR ..."
 echo "  [1/8] Loading iBSS..."
 "$IRECOVERY" -f "$RAMDISK_DIR/iBSS.vresearch101.RELEASE.img4"
 
-# 2. iBEC + go — send immediately after iBSS (no wait, matches upstream timing)
+# 2. iBEC + go — send file and issue 'go' in one irecovery session.
+# A separate '-c go' call would need to reconnect after the file transfer, but
+# the device transitions USB state immediately after iBEC loads and the new
+# connection attempt fails. Combining -f and -c into one call avoids the
+# reconnect and issues 'go' on the same already-open connection.
 echo "  [2/8] Loading iBEC..."
-"$IRECOVERY" -f "$RAMDISK_DIR/iBEC.vresearch101.RELEASE.img4"
-"$IRECOVERY" -c go
+"$IRECOVERY" -f "$RAMDISK_DIR/iBEC.vresearch101.RELEASE.img4" -c go
 
 sleep 1
 
