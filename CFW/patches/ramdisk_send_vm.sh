@@ -22,15 +22,17 @@ fi
 
 echo "[*] Sending ramdisk from $RAMDISK_DIR ..."
 
-# 1. iBSS — send immediately, do NOT poll/wait before iBEC
+# 1. iBSS — send, then wait for device re-enumeration with a fixed sleep.
+# After iBSS loads the VM briefly disconnects and re-enumerates (DFU→recovery).
+# irecovery -q hangs ~7s per attempt so we use a plain sleep instead of polling.
 echo "  [1/8] Loading iBSS..."
 "$IRECOVERY" -f "$RAMDISK_DIR/iBSS.vresearch101.RELEASE.img4"
+echo "  [*] Waiting for re-enumeration after iBSS..."
+sleep 5
 
 # 2. iBEC + go — send file and issue 'go' in one irecovery session.
-# A separate '-c go' call would need to reconnect after the file transfer, but
-# the device transitions USB state immediately after iBEC loads and the new
-# connection attempt fails. Combining -f and -c into one call avoids the
-# reconnect and issues 'go' on the same already-open connection.
+# Combining -f and -c into one call issues 'go' on the already-open
+# connection, avoiding a second reconnect after the transfer completes.
 echo "  [2/8] Loading iBEC..."
 "$IRECOVERY" -f "$RAMDISK_DIR/iBEC.vresearch101.RELEASE.img4" -c go
 
