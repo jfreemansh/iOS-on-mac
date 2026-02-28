@@ -28,7 +28,12 @@ run_phase5_ramdisk() {
     local dfu_a=$!; register_pid "$dfu_a"
     _mk restore_get_shsh
     _mk restore; local rc=$?
-    kill "$dfu_a" 2>/dev/null; wait "$dfu_a" 2>/dev/null
+    # Kill make AND its vphone-cli child — make doesn't propagate signals to children,
+    # so vphone-cli would keep holding Disk.img/nvram.bin locks otherwise.
+    kill "$dfu_a" 2>/dev/null
+    pkill -f "vphone-cli.*--dfu" 2>/dev/null || true
+    sleep 3  # wait for VZ file locks to be released
+    wait "$dfu_a" 2>/dev/null
     [[ $rc -ne 0 ]] && { error "restore failed"; return 1; }
     success "Restore complete!"
 
