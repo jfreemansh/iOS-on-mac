@@ -27,12 +27,16 @@ echo "[*] Sending ramdisk from $RAMDISK_DIR ..."
 # irecovery -q hangs ~7s per attempt so we use a plain sleep instead of polling.
 echo "  [1/8] Loading iBSS..."
 "$IRECOVERY" -f "$RAMDISK_DIR/iBSS.vresearch101.RELEASE.img4"
-echo "  [*] Waiting for re-enumeration after iBSS..."
-sleep 5
+echo "  [*] Waiting for re-enumeration after iBSS (15s)..."
+sleep 15
+echo "  [*] USB devices visible now:"
+system_profiler SPUSBDataType 2>/dev/null | grep -E "Apple|0x05ac|Product ID|Vendor ID" | sed 's/^/      /' || true
+echo "  [*] Serial log tail:"
+tail -5 /Users/john/ios-vm/VM/serial_phase5.log 2>/dev/null | sed 's/^/      /' || echo "      (empty)"
+echo "  [*] vphone-cli process:"
+pgrep -a vphone-cli 2>/dev/null | sed 's/^/      /' || echo "      (not running!)"
 
 # 2. iBEC + go — send file and issue 'go' in one irecovery session.
-# Combining -f and -c into one call issues 'go' on the already-open
-# connection, avoiding a second reconnect after the transfer completes.
 echo "  [2/8] Loading iBEC..."
 "$IRECOVERY" -f "$RAMDISK_DIR/iBEC.vresearch101.RELEASE.img4" -c go
 
