@@ -30,7 +30,7 @@ run_phase5_ramdisk() {
         # Run a make target in background; caller saves $! immediately.
         make -C "$vphone_dir" --no-print-directory \
             VM_DIR="$VM_DIR" CPU="${VM_CPU:-8}" MEMORY="${VM_MEMORY:-16384}" \
-            "$@" &>>"$CURRENT_LOG_FILE" &
+            "$@" >>"$CURRENT_LOG_FILE" 2>&1 &
     }
     _mk_fg() {
         # Run a make target in foreground, tee output.
