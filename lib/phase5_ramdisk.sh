@@ -15,19 +15,31 @@ run_phase5_ramdisk() {
     # Step A: Full restore
     # -------------------------------------------------------------------------
     section "Step A: Full iOS restore"
-    info "This requires TWO terminals running simultaneously."
-    echo
-    echo "  TERMINAL 1 — start VM in DFU mode:"
-    echo "    cd \"$vphone_dir\" && make boot_dfu VM_DIR=\"$VM_DIR\" CPU=${VM_CPU:-8} MEMORY=${VM_MEMORY:-16384}"
-    echo
-    echo "  TERMINAL 2 — once VM shows 'VM started in DFU mode', run restore:"
-    echo "    cd \"$vphone_dir\" && make restore_get_shsh VM_DIR=\"$VM_DIR\""
-    echo "    cd \"$vphone_dir\" && make restore VM_DIR=\"$VM_DIR\""
-    echo
-    echo "  Wait for restore to complete (progress bar reaches 100%)."
-    echo "  Then kill Terminal 1 (Ctrl-C) and wait a few seconds."
-    echo
-    read -r -p "Press ENTER when restore is complete and Terminal 1 is stopped: "
+
+    local _skip_restore=false
+    local _shsh_file
+    _shsh_file="$(find "$VM_DIR/shsh" -name "*.shsh" 2>/dev/null | head -1)"
+    if [[ -n "$_shsh_file" ]]; then
+        echo "  Existing SHSH blob found: $_shsh_file"
+        read -r -p "  Restore already done? Skip Step A? [Y/n]: " _ans
+        [[ "${_ans:-Y}" =~ ^[Yy]$ ]] && _skip_restore=true
+    fi
+
+    if ! $_skip_restore; then
+        info "This requires TWO terminals running simultaneously."
+        echo
+        echo "  TERMINAL 1 — start VM in DFU mode:"
+        echo "    cd \"$vphone_dir\" && make boot_dfu VM_DIR=\"$VM_DIR\" CPU=${VM_CPU:-8} MEMORY=${VM_MEMORY:-16384}"
+        echo
+        echo "  TERMINAL 2 — once VM shows 'VM started in DFU mode', run restore:"
+        echo "    cd \"$vphone_dir\" && make restore_get_shsh VM_DIR=\"$VM_DIR\""
+        echo "    cd \"$vphone_dir\" && make restore VM_DIR=\"$VM_DIR\""
+        echo
+        echo "  Wait for restore to complete (progress bar reaches 100%)."
+        echo "  Then kill Terminal 1 (Ctrl-C) and wait a few seconds."
+        echo
+        read -r -p "Press ENTER when restore is complete and Terminal 1 is stopped: "
+    fi
 
     success "Restore complete!"
 
