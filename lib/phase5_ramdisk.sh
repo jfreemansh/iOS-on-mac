@@ -7,9 +7,6 @@ run_phase5_ramdisk() {
     setup_cleanup_trap
 
     local vphone_dir="$WORK_DIR/tools/vphone-cli"
-    local iproxy_bin="$vphone_dir/.limd/bin/iproxy"
-    [[ ! -x "$iproxy_bin" ]] && iproxy_bin="$(command -v iproxy 2>/dev/null)"
-    [[ -z "$iproxy_bin" ]] && { error "iproxy not found"; return 1; }
 
     # -------------------------------------------------------------------------
     # Step A: Full restore
@@ -44,48 +41,31 @@ run_phase5_ramdisk() {
     success "Restore complete!"
 
     # -------------------------------------------------------------------------
-    # Step B: SSH ramdisk boot
+    # Step B: Ramdisk + CFW
     # -------------------------------------------------------------------------
-    section "Step B: SSH ramdisk boot"
+    section "Step B: Ramdisk + CFW"
 
     pkill -f "vphone-cli" 2>/dev/null || true
     sleep 2
 
     info "This requires TWO terminals running simultaneously."
     echo
-    echo "  TERMINAL 1 — start VM in DFU mode:"
+    echo "  TERMINAL 1 — start VM in DFU mode (keep running):"
     echo "    cd \"$vphone_dir\" && make boot_dfu VM_DIR=\"$VM_DIR\" CPU=${VM_CPU:-8} MEMORY=${VM_MEMORY:-16384}"
     echo
     echo "  TERMINAL 2 — once VM shows 'VM started in DFU mode':"
     echo "    cd \"$vphone_dir\" && make ramdisk_build VM_DIR=\"$VM_DIR\""
     echo "    cd \"$vphone_dir\" && make ramdisk_send VM_DIR=\"$VM_DIR\""
+    echo "    iproxy 2222 22"
+    echo "    cd \"$vphone_dir\" && make cfw_install VM_DIR=\"$VM_DIR\""
     echo
-    echo "  Wait for 'Boot sequence complete'. Leave Terminal 1 running."
+    echo "  Wait for cfw_install to complete. Then Ctrl+C Terminal 1 (boot_dfu)."
     echo
-    read -r -p "Press ENTER when ramdisk_send is complete: "
+    read -r -p "Press ENTER when cfw_install is complete and Terminal 1 is stopped: "
 
-    success "Ramdisk boot chain sent!"
+    pkill -f "vphone-cli" 2>/dev/null || true
+    sleep 2
 
-    # -------------------------------------------------------------------------
-    # iproxy + SSH wait
-    # -------------------------------------------------------------------------
-    pkill -f "iproxy 2222" 2>/dev/null || true
-    "$iproxy_bin" 2222 22 >/dev/null 2>&1 &
-    register_pid $!
-    echo $! > "$WORK_DIR/.iproxy_ramdisk_pid"
-
-    section "Waiting for SSH ramdisk (localhost:2222)"
-    local up=false attempt
-    for attempt in $(seq 1 60); do
-        ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -p 2222 root@localhost "echo ok" 2>/dev/null && { up=true; break; }
-        sleep 2
-    done
-    $up || { error "SSH ramdisk never came up"; return 1; }
-
-    success "SSH ramdisk ready: ssh -p 2222 root@localhost"
-    echo "localhost" > "$WORK_DIR/.vm_ip"
-    echo "2222"      > "$WORK_DIR/.ssh_port"
+    success "CFW installed!"
     save_state "phase5"
 }
