@@ -33,6 +33,7 @@ run_phase1_environment() {
         unzip
         p7zip
         libirecovery
+        coreutils         # provides gtimeout, used in ramdisk_send_vm.sh for bounded irecovery polls
         keystone          # C assembler library; setup_venv.sh builds libkeystone.dylib from it
         autoconf          # required by setup_libimobiledevice.sh
         automake          # required by setup_libimobiledevice.sh
