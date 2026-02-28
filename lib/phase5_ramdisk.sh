@@ -59,6 +59,10 @@ run_phase5_ramdisk() {
         rm -f "$dfu_log"
     }
 
+    info "Killing any stale vphone-cli processes..."
+    pkill -f "vphone-cli" 2>/dev/null || true
+    sleep 2
+
     info "Starting VM in DFU mode (background)..."
     (
         cd "$vphone_dir"
