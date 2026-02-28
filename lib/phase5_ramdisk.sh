@@ -104,6 +104,12 @@ run_phase5_ramdisk() {
     # =========================================================================
     section "Step A: Full iOS restore (idevicerestore -e -y)"
 
+    # Remove any stale SHSH blobs from Phase 4 — they were fetched with a
+    # different DFU nonce and will prevent restore_get_shsh from saving a
+    # fresh blob that matches the current session's nonce.
+    rm -f "$WORK_DIR"/shsh/*.shsh "$WORK_DIR"/shsh/*.shsh2 2>/dev/null || true
+    info "Cleared stale SHSH blobs (will re-fetch in this session)"
+
     info "Starting VM in DFU mode for restore..."
     "$vphone_bin" "${_dfu_flags[@]}" &>/dev/null &
     local dfu_pid_a=$!
