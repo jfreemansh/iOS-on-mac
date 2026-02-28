@@ -20,16 +20,20 @@ fi
 
 echo "[*] Sending ramdisk from $RAMDISK_DIR ..."
 
-# 1. iBSS — upload to DFU device (no wait after, matching upstream timing)
+# 1. iBSS — upload to DFU device.
 echo "  [1/8] Loading iBSS..."
 "$IRECOVERY" -f "$RAMDISK_DIR/iBSS.vresearch101.RELEASE.img4"
 
-# 2. iBEC + go — use a recovery script so the file upload and 'go' command
-# run in a SINGLE irecovery session. A separate '-c go' call requires a
-# reconnect which fails because the device transitions state after iBEC loads.
+# The virtual iBSS takes ~3-4 minutes to execute and re-enumerate USB.
+# Evidence: Run 1 with ~210s accidental wait worked; all shorter waits fail.
+echo "  [*] Waiting for virtual iBSS execution (~4 min)..."
+sleep 240
+
+# 2. iBEC + go — single irecovery session via -e script to avoid reconnect.
+# /upload sends the file; 'go' runs on the same open session.
 echo "  [2/8] Loading iBEC..."
 _ibec_script="$(mktemp /tmp/ibec_send.XXXXXX)"
-printf '/send %s\ngo\n/exit\n' "$RAMDISK_DIR/iBEC.vresearch101.RELEASE.img4" > "$_ibec_script"
+printf '/upload %s\ngo\n/exit\n' "$RAMDISK_DIR/iBEC.vresearch101.RELEASE.img4" > "$_ibec_script"
 "$IRECOVERY" -e "$_ibec_script"
 rm -f "$_ibec_script"
 
