@@ -44,13 +44,21 @@ run_phase5_ramdisk() {
 
     # Step B: ramdisk
     # upstream: terminal 1 = make boot_dfu, terminal 2 = make ramdisk_send
-    # irecovery -f has NO built-in retry — sleep mirrors human switching terminals
+    # After each iBSS/iBEC stage the virtual USB device re-enumerates; irecovery
+    # has no built-in retry, so we wrap it: retry up to 8x with 5s sleep.
+    # Passed via IRECOVERY= make variable — upstream script untouched.
+    local irecovery_real="$vphone_dir/.limd/bin/irecovery"
+    local irecovery_wrap="$WORK_DIR/.irecovery_retry.sh"
+    printf '#!/bin/bash\nfor i in $(seq 1 8); do\n  "%s" "$@" && exit 0\n  [ $i -lt 8 ] && sleep 5\ndone\nexit 1\n' \
+        "$irecovery_real" > "$irecovery_wrap"
+    chmod +x "$irecovery_wrap"
+
     section "Step B: SSH ramdisk boot"
     _mk boot_dfu &
     local dfu_b=$!; register_pid "$dfu_b"
     info "Waiting 15s for VM to present DFU device..."
     sleep 15
-    _mk ramdisk_send; rc=$?
+    _mk ramdisk_send IRECOVERY="$irecovery_wrap"; rc=$?
     kill "$dfu_b" 2>/dev/null
     pkill -f "vphone-cli.*--dfu" 2>/dev/null || true
     wait "$dfu_b" 2>/dev/null
