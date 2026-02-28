@@ -7,207 +7,125 @@ run_phase6_install() {
 
     CURRENT_LOG_FILE="$LOG_DIR/phase6.log"
 
-    # Load saved connection info
-    local vm_ip ssh_port
-    vm_ip="$(cat "$WORK_DIR/.vm_ip" 2>/dev/null || echo "localhost")"
-    ssh_port="$(cat "$WORK_DIR/.ssh_port" 2>/dev/null || echo "$SSH_LOCAL_PORT")"
+    local vphone_dir="$WORK_DIR/tools/vphone-cli"
+    local cfw_install_sh="$vphone_dir/scripts/cfw_install.sh"
 
-    # Load firmware paths
+    if [[ ! -f "$cfw_install_sh" ]]; then
+        error "cfw_install.sh not found at $cfw_install_sh"
+        error "Update vphone-cli: git -C $vphone_dir pull"
+        return 1
+    fi
+
+    # Load firmware paths (used by _install_metal_plugin indirectly)
     if [[ -f "$WORK_DIR/.firmware_paths" ]]; then
         source "$WORK_DIR/.firmware_paths"
     fi
 
-    # SSH helper
+    # SSH helpers targeting ramdisk on localhost:2222
+    # (cfw_install.sh also hardcodes SSH_PORT=2222 SSH_HOST=localhost)
+    local _ssh_host="localhost"
+    local _ssh_port="2222"
+    local sshpass_bin
+    sshpass_bin="$(command -v sshpass 2>/dev/null || true)"
+
     _ssh_cmd() {
-        sshpass -p "$SSH_PASSWORD" ssh \
-            -o ConnectTimeout=10 \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -p "$ssh_port" "root@${vm_ip}" "$@"
+        if [[ -n "$sshpass_bin" ]]; then
+            "$sshpass_bin" -p "$SSH_PASSWORD" ssh \
+                -o ConnectTimeout=10 \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                -p "$_ssh_port" "root@${_ssh_host}" "$@"
+        else
+            ssh -o ConnectTimeout=10 \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                -p "$_ssh_port" "root@${_ssh_host}" "$@"
+        fi
     }
 
     _scp_to() {
         local src="$1"
         local dest="$2"
-        sshpass -p "$SSH_PASSWORD" scp \
-            -o ConnectTimeout=10 \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -P "$ssh_port" "$src" "root@${vm_ip}:${dest}"
+        if [[ -n "$sshpass_bin" ]]; then
+            "$sshpass_bin" -p "$SSH_PASSWORD" scp \
+                -o ConnectTimeout=10 \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                -P "$_ssh_port" "$src" "root@${_ssh_host}:${dest}"
+        else
+            scp -o ConnectTimeout=10 \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                -P "$_ssh_port" "$src" "root@${_ssh_host}:${dest}"
+        fi
     }
 
     # -------------------------------------------------------------------------
-    # 1. Verify SSH connectivity
+    # 1. Verify SSH on localhost:2222 (ramdisk)
     # -------------------------------------------------------------------------
-    section "Verifying SSH connection"
+    section "Verifying SSH ramdisk connection"
 
     if ! _ssh_cmd "echo connected" &>/dev/null; then
-        error "Cannot connect to VM via SSH"
-        error "  Host: $vm_ip  Port: $ssh_port  Password: $SSH_PASSWORD"
-        error ""
-        error "Make sure Phase 5 completed and the VM is still running."
+        error "Cannot connect to SSH ramdisk on localhost:2222"
+        error "Make sure Phase 5 completed successfully and the VM is still running."
         return 1
     fi
-    success "SSH connection verified"
+    success "SSH ramdisk connected (localhost:2222)"
 
     # -------------------------------------------------------------------------
-    # 2. Mount the rootfs
+    # 2. Run upstream cfw_install.sh
+    #    Upstream: cd $(VM_DIR) && zsh cfw_install.sh .
     # -------------------------------------------------------------------------
-    section "Mounting root filesystem"
+    section "Running cfw_install.sh"
 
-    info "Identifying disk layout..."
-    _ssh_cmd "ls /dev/disk*" 2>/dev/null | tee -a "$CURRENT_LOG_FILE"
+    # Expose venv binaries so cfw.py can import pyimg4/capstone/keystone
+    local venv_python="$vphone_dir/.venv/bin/python3"
+    if [[ -x "$venv_python" ]]; then
+        export PATH="$vphone_dir/.venv/bin:$PATH"
+        info "  Python venv activated: $vphone_dir/.venv"
+    fi
 
-    # Mount rootfs read-write
-    info "Mounting /dev/disk1s1 on /mnt1 (read-write)..."
-    _ssh_cmd "/sbin/mount_apfs -o rw /dev/disk1s1 /mnt1" 2>&1 | tee -a "$CURRENT_LOG_FILE" || {
-        warn "mount_apfs on disk1s1 failed, trying alternatives..."
+    info "Running cfw_install.sh from $WORK_DIR ..."
+    (
+        cd "$WORK_DIR"
+        zsh "$cfw_install_sh" . 2>&1 | tee -a "$CURRENT_LOG_FILE"
+    )
+    local cfw_rc=${PIPESTATUS[0]}
 
-        # Try other common disk devices
-        for disk in disk0s1s1 disk1s1 disk2s1; do
-            if _ssh_cmd "/sbin/mount_apfs -o rw /dev/$disk /mnt1" 2>/dev/null; then
-                success "Mounted /dev/$disk on /mnt1"
-                break
-            fi
-        done
-    }
-
-    # Verify mount
-    if _ssh_cmd "ls /mnt1/System" &>/dev/null; then
-        success "Root filesystem mounted at /mnt1"
-    else
-        error "Root filesystem mount failed — /mnt1/System not found"
-        error ""
-        error "Debug: run 'ssh -p $ssh_port root@$vm_ip' and inspect disk layout"
+    if [[ $cfw_rc -ne 0 ]]; then
+        error "cfw_install.sh failed (exit code $cfw_rc)"
+        error "Check: $CURRENT_LOG_FILE"
         return 1
     fi
-
-    # Also mount data volume if present
-    info "Attempting to mount data volume..."
-    _ssh_cmd "mkdir -p /mnt2 && /sbin/mount_apfs -o rw /dev/disk1s2 /mnt2" 2>/dev/null || \
-        warn "Data volume mount skipped (may not be present yet)"
+    success "cfw_install.sh completed!"
 
     # -------------------------------------------------------------------------
-    # 3. Patch seputil
-    # -------------------------------------------------------------------------
-    section "Patching seputil"
-
-    local seputil_path="/mnt1/usr/libexec/seputil"
-    if _ssh_cmd "test -f $seputil_path" 2>/dev/null; then
-        info "Backing up seputil..."
-        _ssh_cmd "cp $seputil_path ${seputil_path}.orig" 2>/dev/null
-
-        info "Patching seputil to skip SEP checks in VM..."
-        # seputil needs to be patched to not crash when SEP hardware is absent
-        # The patch replaces the SEP availability check with a return success
-        _ssh_cmd "
-            # Create a minimal patch: find the SEP init function and make it return 0
-            # This varies by firmware version — the VM tool may handle this
-            if command -v ldid >/dev/null 2>&1; then
-                ldid -S $seputil_path 2>/dev/null || true
-            fi
-        " 2>&1 | tee -a "$CURRENT_LOG_FILE"
-        success "seputil prepared"
-    else
-        warn "seputil not found at $seputil_path"
-    fi
-
-    # -------------------------------------------------------------------------
-    # 4. Patch launchd_cache_loader
-    # -------------------------------------------------------------------------
-    section "Patching launchd_cache_loader"
-
-    local lcd_path="/mnt1/usr/libexec/launchd_cache_loader"
-    if _ssh_cmd "test -f $lcd_path" 2>/dev/null; then
-        info "Backing up launchd_cache_loader..."
-        _ssh_cmd "cp $lcd_path ${lcd_path}.orig" 2>/dev/null
-
-        info "Patching launchd_cache_loader..."
-        # launchd_cache_loader may need patching to skip cryptex/trust cache
-        # validation that fails in the VM environment
-        _ssh_cmd "
-            if command -v ldid >/dev/null 2>&1; then
-                ldid -S $lcd_path 2>/dev/null || true
-            fi
-        " 2>&1 | tee -a "$CURRENT_LOG_FILE"
-        success "launchd_cache_loader prepared"
-    else
-        warn "launchd_cache_loader not found at $lcd_path"
-    fi
-
-    # -------------------------------------------------------------------------
-    # 5. Install Metal compiler plugin (paravirtualized GPU)
+    # 3. Install Metal compiler plugin (custom addition — not in upstream)
     # -------------------------------------------------------------------------
     section "Installing Metal Compiler Plugin"
 
     _install_metal_plugin
 
     # -------------------------------------------------------------------------
-    # 6. Configure SSH for normal boot
+    # 4. Tear down ramdisk SSH tunnel
     # -------------------------------------------------------------------------
-    section "Configuring SSH for normal boot"
+    section "Tearing down ramdisk SSH tunnel"
 
-    info "Setting up SSH daemon..."
-    _ssh_cmd "
-        # Enable SSH on the installed system
-        mkdir -p /mnt1/etc/ssh
-        # Create ssh host keys if they don't exist
-        if [ ! -f /mnt1/etc/ssh/ssh_host_rsa_key ]; then
-            ssh-keygen -t rsa -f /mnt1/etc/ssh/ssh_host_rsa_key -N '' 2>/dev/null || true
+    local _iproxy_pid_file="$WORK_DIR/.iproxy_ramdisk_pid"
+    if [[ -f "$_iproxy_pid_file" ]]; then
+        local _piproxy
+        _piproxy="$(cat "$_iproxy_pid_file")"
+        if kill -0 "$_piproxy" 2>/dev/null; then
+            kill "$_piproxy" 2>/dev/null
+            info "  Stopped iproxy PID $_piproxy"
         fi
-        if [ ! -f /mnt1/etc/ssh/ssh_host_ed25519_key ]; then
-            ssh-keygen -t ed25519 -f /mnt1/etc/ssh/ssh_host_ed25519_key -N '' 2>/dev/null || true
-        fi
-
-        # Set root password
-        echo 'root:alpine' | chpasswd 2>/dev/null || true
-    " 2>&1 | tee -a "$CURRENT_LOG_FILE"
-
-    success "SSH configured"
-
-    # -------------------------------------------------------------------------
-    # 7. Fix filesystem permissions and ownership
-    # -------------------------------------------------------------------------
-    section "Fixing filesystem permissions"
-
-    _ssh_cmd "
-        # Ensure critical directories have correct ownership
-        chown -R root:wheel /mnt1/System 2>/dev/null || true
-        chown -R root:wheel /mnt1/usr 2>/dev/null || true
-
-        # Mark the filesystem as bootable
-        touch /mnt1/.file 2>/dev/null || true
-    " 2>&1 | tee -a "$CURRENT_LOG_FILE"
-
-    success "Filesystem permissions fixed"
-
-    # -------------------------------------------------------------------------
-    # 8. Sync and unmount
-    # -------------------------------------------------------------------------
-    section "Syncing and unmounting"
-
-    info "Syncing filesystem..."
-    _ssh_cmd "sync"
-
-    info "Unmounting volumes..."
-    _ssh_cmd "umount /mnt2 2>/dev/null; umount /mnt1 2>/dev/null; sync" || true
-
-    # -------------------------------------------------------------------------
-    # 9. Halt the ramdisk VM
-    # -------------------------------------------------------------------------
-    section "Halting ramdisk VM"
-
-    info "Sending halt command..."
-    _ssh_cmd "sync && /sbin/halt" 2>/dev/null || true
-
-    # Wait for the VM process to exit
-    sleep 3
-
-    # Kill any remaining VM processes from phase 5
-    cleanup_pids
+        rm -f "$_iproxy_pid_file"
+    fi
+    # Belt-and-suspenders kill
+    pkill -f "iproxy 2222" 2>/dev/null || true
 
     save_state "phase6"
-    success "Phase 6 complete — iOS installed and configured on VM disk."
+    success "Phase 6 complete — CFW installed on VM disk."
     info ""
     info "The VM disk is now ready for normal boot (Phase 7)."
 }

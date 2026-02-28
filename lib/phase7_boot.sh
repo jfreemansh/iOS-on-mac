@@ -9,145 +9,174 @@ run_phase7_boot() {
 
     setup_cleanup_trap
 
-    local vm_tool=""
-    local vm_name="vphone"
-
-    case "$VM_APPROACH" in
-        vphone-cli)
-            vm_tool="$(_find_vm_tool "vphone-cli")"
-            ;;
-        super-tart)
-            vm_tool="$(_find_vm_tool "tart")"
-            ;;
-    esac
-
-    if [[ -z "$vm_tool" ]]; then
-        error "VM tool not found. Run Phase 3 first."
-        return 1
-    fi
-
     # -------------------------------------------------------------------------
-    # 1. Kill any lingering DFU/ramdisk VM processes
+    # 1. Clean up any lingering ramdisk iproxy / DFU processes
     # -------------------------------------------------------------------------
     section "Cleaning up previous VM processes"
 
+    # Kill ramdisk tunnel from Phase 5/6 (port 2222 → 22)
+    pkill -f "iproxy 2222" 2>/dev/null || true
+
     cleanup_pids
 
-    # Also try to find and kill any stale VM processes
-    local stale_pids
-    stale_pids="$(pgrep -f "$vm_name.*--dfu" 2>/dev/null || true)"
-    if [[ -n "$stale_pids" ]]; then
-        info "Killing stale DFU processes: $stale_pids"
-        echo "$stale_pids" | xargs kill 2>/dev/null || true
-        sleep 2
+    # Also kill any stale DFU VM processes
+    pkill -f "vphone-cli.*--dfu" 2>/dev/null || true
+    sleep 1
+
+    # -------------------------------------------------------------------------
+    # 2. Resolve tools
+    # -------------------------------------------------------------------------
+    local vphone_dir="$WORK_DIR/tools/vphone-cli"
+    local vphone_bin
+    vphone_bin="$(find "$vphone_dir/.build" -name "vphone-cli" -type f \
+        ! -path "*dSYM*" ! -path "*/debug/*" 2>/dev/null | head -1)"
+    if [[ -z "$vphone_bin" ]] || [[ ! -x "$vphone_bin" ]]; then
+        error "vphone-cli binary not found in $vphone_dir/.build — run Phase 3 first."
+        return 1
+    fi
+
+    local iproxy_bin="$vphone_dir/.limd/bin/iproxy"
+    if [[ ! -x "$iproxy_bin" ]]; then
+        warn "iproxy not found at $iproxy_bin — falling back to system iproxy"
+        iproxy_bin="$(command -v iproxy 2>/dev/null || true)"
+        if [[ -z "$iproxy_bin" ]]; then
+            error "iproxy not found. Install via: brew install libimobiledevice"
+            return 1
+        fi
     fi
 
     # -------------------------------------------------------------------------
-    # 2. Boot the VM normally
+    # 3. Boot the VM normally
+    #    Upstream: make boot — same flags as boot_dfu but without --dfu
     # -------------------------------------------------------------------------
-    section "Starting iOS VM"
+    section "Starting iOS VM (normal boot)"
 
-    info "Booting VM '$vm_name' in normal mode..."
-    info "Display: ${VM_DISPLAY_WIDTH}x${VM_DISPLAY_HEIGHT} @ ${VM_DISPLAY_PPI}ppi"
+    info "Booting VM..."
     info "CPU: $VM_CPU cores, RAM: $((VM_MEMORY / 1024))GB"
 
-    # vphone-cli takes direct flags — no 'run <name>' or '--vnc-experimental' subcommand.
-    local boot_cmd=(
-        "$vm_tool"
-        --rom    "$VM_ROM_PATH"
-        --disk   "$VM_DISK"
-        --nvram  "$VM_NVRAM"
-        --sep-rom "$VM_SEP_ROM_PATH"
-        --cpu    "$VM_CPU"
-        --memory "$VM_MEMORY"
-        --no-graphics
-    )
-
-    info ""
-    info "Boot command: ${boot_cmd[*]}"
-    info ""
-
-    # Start the VM in the background
-    "${boot_cmd[@]}" &
+    "$vphone_bin" \
+        --rom     "$VM_ROM_PATH" \
+        --disk    "$VM_DISK" \
+        --nvram   "$VM_NVRAM" \
+        --sep-rom "$VM_SEP_ROM_PATH" \
+        --cpu     "${VM_CPU:-8}" \
+        --memory  "${VM_MEMORY:-16384}" \
+        --serial-log "$VM_DIR/serial.log" \
+        --stop-on-panic --stop-on-fatal-error \
+        --sep-storage "$VM_DIR/SEPStorage" \
+        --no-graphics \
+        &>/dev/null &
     local vm_pid=$!
     register_pid "$vm_pid"
-
     info "VM started (PID: $vm_pid)"
 
     # -------------------------------------------------------------------------
-    # 3. Wait for boot and get IP
+    # 4. Start iproxy tunnels (normal boot)
+    #    SSH:  localhost:SSH_LOCAL_PORT (22222) → device:22222
+    #    VNC:  localhost:VNC_LOCAL_PORT (5901)  → device:5901
     # -------------------------------------------------------------------------
-    section "Waiting for VM to boot"
+    section "Starting iproxy tunnels (normal boot)"
 
-    local vm_ip=""
-    info "Waiting for VM to obtain IP address..."
+    "$iproxy_bin" "$SSH_LOCAL_PORT" 22222 &>/dev/null &
+    local iproxy_ssh_pid=$!
+    register_pid "$iproxy_ssh_pid"
+    info "  SSH tunnel: localhost:$SSH_LOCAL_PORT → device:22222 (PID: $iproxy_ssh_pid)"
 
-    for attempt in $(seq 1 90); do
+    "$iproxy_bin" "$VNC_LOCAL_PORT" 5901 &>/dev/null &
+    local iproxy_vnc_pid=$!
+    register_pid "$iproxy_vnc_pid"
+    info "  VNC tunnel: localhost:$VNC_LOCAL_PORT → device:5901  (PID: $iproxy_vnc_pid)"
+
+    # -------------------------------------------------------------------------
+    # 5. Wait for SSH on localhost:SSH_LOCAL_PORT
+    # -------------------------------------------------------------------------
+    section "Waiting for VM to boot and SSH to become available"
+
+    local ssh_ready=false
+    local sshpass_bin
+    sshpass_bin="$(command -v sshpass 2>/dev/null || true)"
+
+    info "Polling localhost:$SSH_LOCAL_PORT for SSH (up to 3 min)..."
+    local attempt
+    for attempt in $(seq 1 60); do
+        # Bail out early if the VM process died
         if ! kill -0 "$vm_pid" 2>/dev/null; then
-            error "VM process exited unexpectedly"
-            wait "$vm_pid" 2>/dev/null
+            error "VM process exited unexpectedly — check $VM_DIR/serial.log"
             return 1
         fi
 
-        # vphone-cli has no 'ip <name>' subcommand; detect via DHCP leases / arp.
-        vm_ip="$(_get_vphone_ip 2>/dev/null || echo '')"
-        if [[ -n "$vm_ip" ]] && [[ "$vm_ip" != "0.0.0.0" ]]; then
-            break
+        if [[ -n "$sshpass_bin" ]]; then
+            if "$sshpass_bin" -p "$SSH_PASSWORD" ssh \
+                   -o ConnectTimeout=3 \
+                   -o StrictHostKeyChecking=no \
+                   -o UserKnownHostsFile=/dev/null \
+                   -p "$SSH_LOCAL_PORT" "root@localhost" "uname -a" 2>/dev/null; then
+                ssh_ready=true
+                break
+            fi
+        else
+            if ssh -o ConnectTimeout=3 \
+                   -o StrictHostKeyChecking=no \
+                   -o UserKnownHostsFile=/dev/null \
+                   -p "$SSH_LOCAL_PORT" "root@localhost" "uname -a" 2>/dev/null; then
+                ssh_ready=true
+                break
+            fi
         fi
 
-        if [[ $(( attempt % 15 )) -eq 0 ]]; then
-            info "  Still waiting for boot... (${attempt}s / 180s)"
-        fi
-        sleep 2
-    done
-
-    if [[ -n "$vm_ip" ]] && [[ "$vm_ip" != "0.0.0.0" ]]; then
-        success "VM IP address: $vm_ip"
-    else
-        warn "Could not determine VM IP — it may still be booting"
-        vm_ip="localhost"
-    fi
-
-    # -------------------------------------------------------------------------
-    # 4. Wait for SSH
-    # -------------------------------------------------------------------------
-    section "Checking SSH connectivity"
-
-    local ssh_port=22
-    [[ "$vm_ip" == "localhost" ]] && ssh_port="$SSH_LOCAL_PORT"
-
-    local ssh_ready=false
-    for attempt in $(seq 1 30); do
-        if sshpass -p "$SSH_PASSWORD" ssh \
-               -o ConnectTimeout=3 \
-               -o StrictHostKeyChecking=no \
-               -o UserKnownHostsFile=/dev/null \
-               -p "$ssh_port" "root@${vm_ip}" "uname -a" 2>/dev/null; then
-            ssh_ready=true
-            break
-        fi
+        [[ $(( attempt % 10 )) -eq 0 ]] && info "  Still waiting... (${attempt}/60)"
         sleep 3
     done
 
-    if $ssh_ready; then
-        success "SSH is available!"
+    if ! $ssh_ready; then
+        warn "SSH not available yet on localhost:$SSH_LOCAL_PORT"
+        warn "The system may still be booting — check $VM_DIR/serial.log"
+        warn "Try manually: ssh -p $SSH_LOCAL_PORT root@localhost  (password: $SSH_PASSWORD)"
     else
-        warn "SSH not yet available — the system may still be booting"
-        warn "Try manually: ssh -p $ssh_port root@$vm_ip (password: $SSH_PASSWORD)"
+        success "SSH is available!"
     fi
 
     # -------------------------------------------------------------------------
-    # 5. Print connection info
+    # 6. First-boot detection
+    #    If /var/profile is absent this is the device's first normal boot.
+    #    Log it — the system will initialize launchd services on its own.
+    # -------------------------------------------------------------------------
+    if $ssh_ready; then
+        local _ssh_check_cmd
+        if [[ -n "$sshpass_bin" ]]; then
+            _ssh_check_cmd() { "$sshpass_bin" -p "$SSH_PASSWORD" ssh \
+                -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                -p "$SSH_LOCAL_PORT" "root@localhost" "$@"; }
+        else
+            _ssh_check_cmd() { ssh \
+                -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                -p "$SSH_LOCAL_PORT" "root@localhost" "$@"; }
+        fi
+
+        if ! _ssh_check_cmd "test -f /var/profile" 2>/dev/null; then
+            info ""
+            info "First boot detected (/var/profile absent)."
+            info "iOS is initializing — launchd services are starting up."
+            info "This may take 1-2 minutes on first boot."
+        else
+            info "System has booted before — /var/profile present."
+        fi
+    fi
+
+    # -------------------------------------------------------------------------
+    # 7. Print connection info
     # -------------------------------------------------------------------------
     echo ""
     echo -e "${BOLD}${GREEN}=================================================================${RESET}"
     echo -e "${BOLD}${GREEN}  iOS VM is running!${RESET}"
     echo -e "${BOLD}${GREEN}=================================================================${RESET}"
     echo ""
-    echo -e "  ${BOLD}SSH:${RESET}  ssh -p $ssh_port root@$vm_ip"
-    echo -e "  ${BOLD}Password:${RESET}  $SSH_PASSWORD"
-    echo -e "  ${BOLD}VNC:${RESET}  vnc://$vm_ip:$VNC_LOCAL_PORT"
-    echo -e "  ${BOLD}VM PID:${RESET}  $vm_pid"
+    echo -e "  ${BOLD}SSH:${RESET}      ssh -p $SSH_LOCAL_PORT root@localhost"
+    echo -e "  ${BOLD}Password:${RESET} $SSH_PASSWORD"
+    echo -e "  ${BOLD}VNC:${RESET}      vnc://localhost:$VNC_LOCAL_PORT"
+    echo -e "  ${BOLD}VM PID:${RESET}   $vm_pid"
     echo ""
     echo -e "  ${DIM}To stop the VM:  kill $vm_pid${RESET}"
     echo -e "  ${DIM}To re-run:       ./setup.sh --phase 7${RESET}"
@@ -156,8 +185,8 @@ run_phase7_boot() {
     save_state "phase7"
     success "Phase 7 complete — iOS VM is booted and running."
 
-    # Keep the script running so cleanup trap works
-    info "Press Ctrl+C to stop the VM."
+    # Keep the script running so cleanup trap works and tunnels stay alive
+    info "Press Ctrl+C to stop the VM and iproxy tunnels."
     wait "$vm_pid" 2>/dev/null || true
 }
 

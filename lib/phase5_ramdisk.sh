@@ -4,7 +4,7 @@
 # and waits for SSH access.
 
 run_phase5_ramdisk() {
-    phase_banner "5" "DFU Boot + SSH Ramdisk"
+    phase_banner "5" "DFU Boot + Restore + SSH Ramdisk"
 
     CURRENT_LOG_FILE="$LOG_DIR/phase5.log"
 
@@ -15,173 +15,245 @@ run_phase5_ramdisk() {
         source "$WORK_DIR/.firmware_paths"
     fi
 
-    local vm_tool=""
-    local vm_name="vphone"
-
-    case "$VM_APPROACH" in
-        vphone-cli)
-            vm_tool="$(_find_vm_tool "vphone-cli")"
-            ;;
-        super-tart)
-            vm_tool="$(_find_vm_tool "tart")"
-            ;;
-    esac
-
-    if [[ -z "$vm_tool" ]]; then
-        error "VM tool not found. Run Phase 3 first."
-        return 1
-    fi
-    info "Using VM tool: $vm_tool"
-
     # -------------------------------------------------------------------------
-    # 1. Create VM if it doesn't exist
+    # Resolve tools
     # -------------------------------------------------------------------------
-    section "Preparing VM"
-
-    _ensure_vm_disk_exists "$vm_tool" "$vm_name"
-
-    # -------------------------------------------------------------------------
-    # 2. Boot into DFU mode
-    # -------------------------------------------------------------------------
-    section "Booting VM into DFU mode"
-
-    info "Starting VM in DFU mode..."
-    info "The VM will wait for firmware to be loaded."
-
-    # vphone-cli takes direct flags; it has no 'run <name>' subcommand.
-    "$vm_tool" \
-        --rom    "$VM_ROM_PATH" \
-        --disk   "$VM_DISK" \
-        --nvram  "$VM_NVRAM" \
-        --sep-rom "$VM_SEP_ROM_PATH" \
-        --cpu    "$VM_CPU" \
-        --memory "$VM_MEMORY" \
-        --serial-log "$VM_DIR/serial_phase5.log" \
-        --dfu --no-graphics &
-    local dfu_pid=$!
-    register_pid "$dfu_pid"
-
-    # Give the VM time to start and enter DFU
-    info "Waiting for VM to enter DFU mode..."
-    sleep 5
-
-    if ! kill -0 "$dfu_pid" 2>/dev/null; then
-        error "VM process exited unexpectedly"
-        wait "$dfu_pid" 2>/dev/null
+    local vphone_dir="$WORK_DIR/tools/vphone-cli"
+    local vphone_bin
+    vphone_bin="$(find "$vphone_dir/.build" -name "vphone-cli" -type f \
+        ! -path "*dSYM*" ! -path "*/debug/*" 2>/dev/null | head -1)"
+    if [[ -z "$vphone_bin" ]] || [[ ! -x "$vphone_bin" ]]; then
+        error "vphone-cli binary not found in $vphone_dir/.build — run Phase 3 first."
         return 1
     fi
 
-    success "VM is running in DFU mode (PID: $dfu_pid)"
-
-    # -------------------------------------------------------------------------
-    # 3. Load patched boot chain via DFU
-    # -------------------------------------------------------------------------
-    section "Loading patched boot chain"
-
-    # The boot chain loading depends on the tool
-    local _bootchain_rc=0
-    case "$VM_APPROACH" in
-        vphone-cli)
-            _load_bootchain_vphone "$vm_tool" "$vm_name" || _bootchain_rc=$?
-            ;;
-        super-tart)
-            _load_bootchain_supertart "$vm_tool" "$vm_name" || _bootchain_rc=$?
-            ;;
-    esac
-    if [[ $_bootchain_rc -ne 0 ]]; then
-        error "Boot chain loading failed — cannot proceed to SSH wait."
-        kill "$dfu_pid" 2>/dev/null; wait "$dfu_pid" 2>/dev/null
-        error "Check $VM_DIR/serial.log for details."
+    local idevicerestore="$vphone_dir/.limd/bin/idevicerestore"
+    if [[ ! -x "$idevicerestore" ]]; then
+        error "idevicerestore not found at $idevicerestore — run Phase 3 first."
         return 1
     fi
 
+    local irecovery_bin="$vphone_dir/.limd/bin/irecovery"
+    if [[ ! -x "$irecovery_bin" ]]; then
+        error "irecovery not found at $irecovery_bin — run Phase 3 first."
+        return 1
+    fi
+
+    local iproxy_bin="$vphone_dir/.limd/bin/iproxy"
+    if [[ ! -x "$iproxy_bin" ]]; then
+        warn "iproxy not found at $iproxy_bin — falling back to system iproxy"
+        iproxy_bin="$(command -v iproxy 2>/dev/null || true)"
+        if [[ -z "$iproxy_bin" ]]; then
+            error "iproxy not found. Install via: brew install libimobiledevice"
+            return 1
+        fi
+    fi
+
+    # Verify prerequisites
+    if [[ ! -e "$WORK_DIR/iPhone_Restore" ]]; then
+        error "iPhone_Restore not found in $WORK_DIR — run Phase 4 first."
+        return 1
+    fi
+
+    local ramdisk_dir="$WORK_DIR/Ramdisk"
+    if [[ ! -d "$ramdisk_dir" ]]; then
+        error "Ramdisk/ not found — run Phase 4 first (ramdisk_build.py must succeed)."
+        return 1
+    fi
+
+    if [[ ! -f "$VM_DISK" ]]; then
+        error "VM disk not found: $VM_DISK — run Phase 4 first (SHSH fetch creates the disk)."
+        return 1
+    fi
+    if [[ ! -f "$VM_NVRAM" ]]; then
+        touch "$VM_NVRAM"
+    fi
+
+    # Common DFU boot flags shared between Step A and Step B
+    local _dfu_flags=(
+        --rom     "$VM_ROM_PATH"
+        --disk    "$VM_DISK"
+        --nvram   "$VM_NVRAM"
+        --sep-rom "$VM_SEP_ROM_PATH"
+        --cpu     "${VM_CPU:-8}"
+        --memory  "${VM_MEMORY:-16384}"
+        --no-graphics
+        --dfu
+        --stop-on-panic --stop-on-fatal-error
+        --sep-storage "$VM_DIR/SEPStorage"
+    )
+
+    # Helper: wait for DFU/Recovery device to enumerate (up to 60 s)
+    _wait_for_dfu() {
+        local label="$1"
+        info "  Waiting for DFU device ($label)..."
+        local _i
+        for _i in $(seq 1 30); do
+            if "$irecovery_bin" -q 2>/dev/null | grep -qi "CPID\|DFU\|Recovery"; then
+                info "  DFU device ready (attempt $_i)"
+                return 0
+            fi
+            sleep 2
+        done
+        error "  DFU device did not appear after 60 s"
+        return 1
+    }
+
+    # =========================================================================
+    # Step A — Full restore via idevicerestore
+    # Upstream: make boot_dfu (terminal 1) + make restore (terminal 2)
+    # =========================================================================
+    section "Step A: Full iOS restore (idevicerestore -e -y)"
+
+    info "Starting VM in DFU mode for restore..."
+    "$vphone_bin" "${_dfu_flags[@]}" \
+        --serial-log "$VM_DIR/serial_restore.log" \
+        &>/dev/null &
+    local dfu_pid_a=$!
+    register_pid "$dfu_pid_a"
+    info "  DFU boot PID: $dfu_pid_a"
+
+    if ! _wait_for_dfu "restore"; then
+        kill "$dfu_pid_a" 2>/dev/null; wait "$dfu_pid_a" 2>/dev/null
+        return 1
+    fi
+
+    info "Running idevicerestore..."
+    (
+        cd "$WORK_DIR"
+        "$idevicerestore" -e -y ./iPhone_Restore 2>&1 | tee -a "$CURRENT_LOG_FILE"
+    )
+    local restore_rc=${PIPESTATUS[0]}
+
+    info "Stopping DFU VM (restore done)..."
+    kill "$dfu_pid_a" 2>/dev/null; wait "$dfu_pid_a" 2>/dev/null
+
+    if [[ $restore_rc -ne 0 ]]; then
+        error "idevicerestore failed (exit code $restore_rc)"
+        error "Check: $CURRENT_LOG_FILE"
+        return 1
+    fi
+    success "iOS restore complete!"
+
+    # Brief pause before next DFU boot
+    sleep 3
+
+    # =========================================================================
+    # Step B — Ramdisk boot for SSH access
+    # Upstream: make boot_dfu (terminal 1) + make ramdisk_send (terminal 2)
+    # =========================================================================
+    section "Step B: SSH ramdisk boot (ramdisk_send.sh)"
+
+    # Resolve ramdisk_send.sh — prefer local VM wrapper, fall back to upstream
+    local send_script
+    local _wrapper="$SCRIPT_DIR/CFW/patches/ramdisk_send_vm.sh"
+    if [[ -f "$_wrapper" ]]; then
+        send_script="$_wrapper"
+        info "  Using VM send wrapper: $send_script"
+    else
+        send_script="$vphone_dir/scripts/ramdisk_send.sh"
+        info "  Using upstream ramdisk_send.sh"
+    fi
+    if [[ ! -f "$send_script" ]]; then
+        error "ramdisk_send.sh not found at $send_script"
+        return 1
+    fi
+
+    info "Starting VM in DFU mode for ramdisk..."
+    "$vphone_bin" "${_dfu_flags[@]}" \
+        --serial-log "$VM_DIR/serial_ramdisk.log" \
+        &>/dev/null &
+    local dfu_pid_b=$!
+    register_pid "$dfu_pid_b"
+    info "  DFU boot PID: $dfu_pid_b"
+
+    if ! _wait_for_dfu "ramdisk"; then
+        kill "$dfu_pid_b" 2>/dev/null; wait "$dfu_pid_b" 2>/dev/null
+        return 1
+    fi
+
+    info "Sending ramdisk boot chain..."
+    (
+        cd "$WORK_DIR"
+        IRECOVERY="$irecovery_bin" zsh "$send_script" "$ramdisk_dir" \
+            2>&1 | tee -a "$CURRENT_LOG_FILE"
+    )
+    local send_rc=${PIPESTATUS[0]}
+
+    if [[ $send_rc -ne 0 ]]; then
+        error "ramdisk_send.sh failed (exit code $send_rc)"
+        kill "$dfu_pid_b" 2>/dev/null; wait "$dfu_pid_b" 2>/dev/null
+        return 1
+    fi
+    success "Ramdisk boot chain sent — device booting ramdisk..."
+
     # -------------------------------------------------------------------------
-    # 4. Wait for SSH ramdisk to become available
+    # Start iproxy 2222 → 22 for ramdisk SSH
+    # (cfw_install.sh hardcodes SSH_PORT=2222, SSH_HOST=localhost)
+    # -------------------------------------------------------------------------
+    section "Starting iproxy (ramdisk SSH: localhost:2222 → device:22)"
+
+    pkill -f "iproxy 2222" 2>/dev/null || true
+    sleep 1
+
+    "$iproxy_bin" 2222 22 &>/dev/null &
+    local iproxy_pid=$!
+    register_pid "$iproxy_pid"
+    echo "$iproxy_pid" > "$WORK_DIR/.iproxy_ramdisk_pid"
+    info "  iproxy 2222→22 started (PID: $iproxy_pid)"
+
+    # -------------------------------------------------------------------------
+    # Wait for SSH on localhost:2222
     # -------------------------------------------------------------------------
     section "Waiting for SSH ramdisk"
 
-    local vm_ip=""
-    info "Getting VM IP address..."
-
-    # vphone-cli has no 'ip <name>' subcommand; detect the guest IP from the
-    # Virtualization.framework DHCP lease table or via arp on the private subnet.
-    for attempt in $(seq 1 30); do
-        vm_ip="$(_get_vphone_ip 2>/dev/null || echo '')"
-        if [[ -n "$vm_ip" ]] && [[ "$vm_ip" != "0.0.0.0" ]]; then
-            break
-        fi
-        sleep 2
-    done
-
-    local ssh_port
-    if [[ -z "$vm_ip" ]] || [[ "$vm_ip" == "0.0.0.0" ]]; then
-        warn "Could not get VM IP automatically."
-        warn "The VM may use port forwarding instead."
-        vm_ip="localhost"
-        ssh_port="$SSH_LOCAL_PORT"
-    else
-        info "VM IP: $vm_ip"
-        ssh_port=22
-    fi
-
-    # Save VM IP for later phases
-    echo "$vm_ip" > "$WORK_DIR/.vm_ip"
-    echo "$ssh_port" > "$WORK_DIR/.ssh_port"
-
-    # Wait for SSH to become available
-    info "Waiting for SSH to become available..."
     local ssh_ready=false
+    local sshpass_bin
+    sshpass_bin="$(command -v sshpass 2>/dev/null || true)"
 
+    info "Polling localhost:2222 for SSH..."
+    local attempt
     for attempt in $(seq 1 60); do
-        if ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no \
-               -o UserKnownHostsFile=/dev/null \
-               -p "$ssh_port" "root@${vm_ip}" "echo ok" 2>/dev/null; then
-            ssh_ready=true
-            break
-        fi
-
-        # Try with sshpass if available
-        if check_command sshpass; then
-            if sshpass -p "$SSH_PASSWORD" ssh \
+        if [[ -n "$sshpass_bin" ]]; then
+            if "$sshpass_bin" -p "$SSH_PASSWORD" ssh \
                    -o ConnectTimeout=2 -o StrictHostKeyChecking=no \
                    -o UserKnownHostsFile=/dev/null \
-                   -p "$ssh_port" "root@${vm_ip}" "echo ok" 2>/dev/null; then
+                   -p 2222 "root@localhost" "echo ok" 2>/dev/null; then
+                ssh_ready=true
+                break
+            fi
+        else
+            if ssh -o ConnectTimeout=2 -o StrictHostKeyChecking=no \
+                   -o UserKnownHostsFile=/dev/null \
+                   -p 2222 "root@localhost" "echo ok" 2>/dev/null; then
                 ssh_ready=true
                 break
             fi
         fi
-
-        if [[ $(( attempt % 10 )) -eq 0 ]]; then
-            info "  Still waiting... (attempt $attempt/60)"
-        fi
+        [[ $(( attempt % 10 )) -eq 0 ]] && info "  Still waiting... (attempt $attempt/60)"
         sleep 2
     done
 
     if $ssh_ready; then
         success "SSH ramdisk is ready!"
-        success "  Host: $vm_ip"
-        success "  Port: $ssh_port"
-        success "  Password: $SSH_PASSWORD"
+        success "  ssh -p 2222 root@localhost  (password: $SSH_PASSWORD)"
     else
-        error "SSH ramdisk did not become available within timeout."
-        error "You may need to manually verify the VM state."
-        error ""
-        error "Try connecting manually:"
-        error "  ssh -p $ssh_port root@$vm_ip  (password: $SSH_PASSWORD)"
+        error "SSH ramdisk did not become available on localhost:2222"
+        error "Check: $VM_DIR/serial_ramdisk.log"
         return 1
     fi
 
+    # Save connection info for Phase 6
+    echo "localhost" > "$WORK_DIR/.vm_ip"
+    echo "2222"      > "$WORK_DIR/.ssh_port"
+
     save_state "phase5"
-    success "Phase 5 complete — SSH ramdisk is running."
-    info ""
-    info "The VM is now running with SSH access."
-    info "Phase 6 will install iOS to the VM disk via SSH."
-    info ""
-    info "DFU VM PID: $dfu_pid"
+    success "Phase 5 complete — SSH ramdisk running on localhost:2222."
+    info "Phase 6 will run cfw_install.sh and install the Metal plugin."
 }
 
 # =============================================================================
-# Helpers
+# Helpers (legacy — kept for reference; no longer called by run_phase5_ramdisk)
 # =============================================================================
 
 

@@ -41,6 +41,13 @@ run_phase4_patch() {
         info "Compatibility symlink: $restore_link -> $IPHONE_EXTRACT"
     fi
 
+    # Capital-I symlink for cfw_install.sh's find_restore_dir() glob: iPhone*_Restore
+    local restore_link_cap="$WORK_DIR/iPhone_Restore"
+    if [[ ! -L "$restore_link_cap" ]] || [[ "$(readlink "$restore_link_cap")" != "$IPHONE_EXTRACT" ]]; then
+        ln -sfn "$IPHONE_EXTRACT" "$restore_link_cap"
+        info "Compatibility symlink: $restore_link_cap -> $IPHONE_EXTRACT"
+    fi
+
     # -------------------------------------------------------------------------
     # 3. Verify and install Python patching dependencies
     # -------------------------------------------------------------------------
