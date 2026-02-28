@@ -6,6 +6,11 @@ run_phase5_ramdisk() {
     CURRENT_LOG_FILE="$LOG_DIR/phase5.log"
     setup_cleanup_trap
 
+    # Kill any stale vphone-cli from a previous interrupted run — it holds
+    # Disk.img/nvram.bin/SEPStorage locks and will cause Code=35 immediately.
+    pkill -f "vphone-cli.*--dfu" 2>/dev/null || true
+    sleep 2
+
     local vphone_dir="$WORK_DIR/tools/vphone-cli"
     local iproxy_bin="$vphone_dir/.limd/bin/iproxy"
     [[ ! -x "$iproxy_bin" ]] && iproxy_bin="$(command -v iproxy 2>/dev/null)"
@@ -46,7 +51,10 @@ run_phase5_ramdisk() {
     info "Waiting 15s for VM to present DFU device..."
     sleep 15
     _mk ramdisk_send; rc=$?
-    [[ $rc -ne 0 ]] && { kill "$dfu_b" 2>/dev/null; error "ramdisk_send failed"; return 1; }
+    kill "$dfu_b" 2>/dev/null
+    pkill -f "vphone-cli.*--dfu" 2>/dev/null || true
+    wait "$dfu_b" 2>/dev/null
+    [[ $rc -ne 0 ]] && { error "ramdisk_send failed"; return 1; }
     success "Ramdisk boot chain sent!"
 
     # iproxy 2222->22 (cfw_install.sh expects SSH on localhost:2222)
