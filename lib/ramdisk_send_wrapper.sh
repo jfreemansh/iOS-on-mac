@@ -27,11 +27,23 @@ echo "  [1/8] Loading iBSS..."
 "$IRECOVERY" -f "$RAMDISK_DIR/iBSS.vresearch101.RELEASE.img4"
 
 echo "  [*] Waiting for device to re-enumerate in Recovery mode..."
-sleep 8
+sleep 3
 
-# 2. Load iBEC
+# 2. Load iBEC — retry until device is visible (re-enumeration timing varies)
 echo "  [2/8] Loading iBEC..."
-"$IRECOVERY" -f "$RAMDISK_DIR/iBEC.vresearch101.RELEASE.img4"
+_ibec_ok=false
+for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+    echo "    attempt $_attempt/10..."
+    if "$IRECOVERY" -f "$RAMDISK_DIR/iBEC.vresearch101.RELEASE.img4" 2>/dev/null; then
+        _ibec_ok=true
+        break
+    fi
+    sleep 3
+done
+if ! $_ibec_ok; then
+    echo "[-] iBEC: Unable to connect after 10 attempts"
+    exit 1
+fi
 "$IRECOVERY" -c go
 
 sleep 1
