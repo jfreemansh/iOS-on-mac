@@ -115,7 +115,24 @@ run_phase5_ramdisk() {
         return 1
     fi
 
-    info "Running idevicerestore..."
+    # --- upstream: make restore_get_shsh ---
+    # Fetch SHSH blob NOW (same DFU session = same nonce).
+    # This overwrites any stale blob from Phase 4 that was fetched with a
+    # different nonce, so the subsequent full-restore call finds a match.
+    info "Fetching SHSH blob for current nonce (restore_get_shsh)..."
+    (
+        cd "$WORK_DIR"
+        "$idevicerestore" -e -y ./iPhone_Restore -t 2>&1 | tee -a "$CURRENT_LOG_FILE"
+    )
+    # -t exits 0 on success; non-zero is non-fatal (we'll try the restore anyway)
+    if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
+        success "SHSH blob saved for current nonce"
+    else
+        warn "SHSH fetch returned non-zero — continuing with restore anyway"
+    fi
+
+    # --- upstream: make restore ---
+    info "Running idevicerestore (full restore, same DFU session)..."
     (
         cd "$WORK_DIR"
         "$idevicerestore" -e -y ./iPhone_Restore 2>&1 | tee -a "$CURRENT_LOG_FILE"
