@@ -79,7 +79,6 @@ run_phase5_ramdisk() {
         --memory  "${VM_MEMORY:-16384}"
         --no-graphics
         --dfu
-        --stop-on-panic --stop-on-fatal-error
         --sep-storage "$VM_DIR/SEPStorage"
     )
 
@@ -106,9 +105,7 @@ run_phase5_ramdisk() {
     section "Step A: Full iOS restore (idevicerestore -e -y)"
 
     info "Starting VM in DFU mode for restore..."
-    "$vphone_bin" "${_dfu_flags[@]}" \
-        --serial-log "$VM_DIR/serial_restore.log" \
-        &>/dev/null &
+    "$vphone_bin" "${_dfu_flags[@]}" &>/dev/null &
     local dfu_pid_a=$!
     register_pid "$dfu_pid_a"
     info "  DFU boot PID: $dfu_pid_a"
@@ -160,9 +157,7 @@ run_phase5_ramdisk() {
     fi
 
     info "Starting VM in DFU mode for ramdisk..."
-    "$vphone_bin" "${_dfu_flags[@]}" \
-        --serial-log "$VM_DIR/serial_ramdisk.log" \
-        &>/dev/null &
+    "$vphone_bin" "${_dfu_flags[@]}" &>/dev/null &
     local dfu_pid_b=$!
     register_pid "$dfu_pid_b"
     info "  DFU boot PID: $dfu_pid_b"

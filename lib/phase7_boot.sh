@@ -61,8 +61,6 @@ run_phase7_boot() {
         --sep-rom "$VM_SEP_ROM_PATH" \
         --cpu     "${VM_CPU:-8}" \
         --memory  "${VM_MEMORY:-16384}" \
-        --serial-log "$VM_DIR/serial.log" \
-        --stop-on-panic --stop-on-fatal-error \
         --sep-storage "$VM_DIR/SEPStorage" \
         --no-graphics \
         &>/dev/null &

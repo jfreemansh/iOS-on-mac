@@ -202,8 +202,6 @@ print(f'  Sparse disk: {size // (1024**3)} GB at {path}')
         --nvram  "$VM_NVRAM"          \
         --cpu    "${VM_CPU:-4}"       \
         --memory "${VM_MEMORY:-8192}" \
-        --serial-log "$VM_DIR/serial_shsh.log" \
-        --stop-on-panic --stop-on-fatal-error \
         --sep-rom     "$VM_SEP_ROM_PATH"   \
         --sep-storage "$VM_DIR/SEPStorage" \
         --no-graphics --dfu &>/dev/null &
