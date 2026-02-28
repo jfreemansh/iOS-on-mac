@@ -1,22 +1,18 @@
 #!/bin/zsh
 # ramdisk_send_vm.sh — variant of upstream ramdisk_send.sh for virtual devices.
 #
-# After iBSS is sent the VM briefly disconnects and re-enumerates the USB
-# device (DFU → iBSS/recovery mode).  On real hardware irecovery reconnects
-# instantly; on the VM the re-enumeration takes a few seconds so we poll
-# for the device explicitly before sending iBEC.
+# Mirrors upstream ramdisk_send.sh exactly: iBSS and iBEC are sent back-to-back
+# with no polling wait in between.  In the virtual device the DFU connection
+# stays open (or re-enumerates fast enough) that an immediate iBEC send works.
+# Inserting a polling wait between iBSS and iBEC causes "Unable to connect to
+# device" because irecovery -q hangs ~7 s per attempt and the device moves on.
 #
 # Usage:
 #   IRECOVERY=/path/to/irecovery zsh ramdisk_send_vm.sh <Ramdisk_dir>
-#
-# Environment:
-#   IRECOVERY       — irecovery binary (default: irecovery)
-#   IBSS_POLL_SECS  — max seconds to wait for device after iBSS (default: 30)
 set -euo pipefail
 
 IRECOVERY="${IRECOVERY:-irecovery}"
 RAMDISK_DIR="${1:-Ramdisk}"
-IBSS_POLL_SECS="${IBSS_POLL_SECS:-30}"
 
 if [ ! -d "$RAMDISK_DIR" ]; then
     echo "[-] Ramdisk directory not found: $RAMDISK_DIR"
@@ -24,33 +20,13 @@ if [ ! -d "$RAMDISK_DIR" ]; then
     exit 1
 fi
 
-# Poll until irecovery sees any device (DFU or recovery) or timeout
-_wait_device() {
-    local label="$1" max="$2"
-    echo "  [*] Waiting for device ($label, up to ${max}s)..."
-    local i=0
-    while [[ $i -lt $max ]]; do
-        if "$IRECOVERY" -q &>/dev/null 2>&1; then
-            echo "  [*] Device ready after ${i}s ($label)"
-            return 0
-        fi
-        sleep 1
-        (( i++ )) || true
-    done
-    echo "  [!] Device not seen after ${max}s ($label) — attempting anyway"
-    return 1
-}
-
 echo "[*] Sending ramdisk from $RAMDISK_DIR ..."
 
-# 1. iBSS — after upload the VM executes it and re-enumerates USB
+# 1. iBSS — send immediately, do NOT poll/wait before iBEC
 echo "  [1/8] Loading iBSS..."
 "$IRECOVERY" -f "$RAMDISK_DIR/iBSS.vresearch101.RELEASE.img4"
 
-# Poll for device re-enumeration after iBSS (may take several seconds on VM)
-_wait_device "post-iBSS" "$IBSS_POLL_SECS" || true
-
-# 2. iBEC + go
+# 2. iBEC + go — send immediately after iBSS (no wait, matches upstream timing)
 echo "  [2/8] Loading iBEC..."
 "$IRECOVERY" -f "$RAMDISK_DIR/iBEC.vresearch101.RELEASE.img4"
 "$IRECOVERY" -c go
