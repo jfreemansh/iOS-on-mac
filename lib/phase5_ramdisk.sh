@@ -47,8 +47,10 @@ run_phase5_ramdisk() {
     # After each iBSS/iBEC stage the virtual USB device re-enumerates; irecovery
     # has no built-in retry, so we wrap it: retry up to 8x with 5s sleep.
     # Passed via IRECOVERY= make variable — upstream script untouched.
+    # The Makefile does IRECOVERY="$(CURDIR)/$(IRECOVERY)" so IRECOVERY must be
+    # a path relative to $vphone_dir — write the wrapper inside .limd/bin/
     local irecovery_real="$vphone_dir/.limd/bin/irecovery"
-    local irecovery_wrap="$WORK_DIR/.irecovery_retry.sh"
+    local irecovery_wrap="$vphone_dir/.limd/bin/irecovery_retry"
     printf '#!/bin/bash\nfor i in $(seq 1 8); do\n  "%s" "$@" && exit 0\n  [ $i -lt 8 ] && sleep 5\ndone\nexit 1\n' \
         "$irecovery_real" > "$irecovery_wrap"
     chmod +x "$irecovery_wrap"
@@ -58,7 +60,7 @@ run_phase5_ramdisk() {
     local dfu_b=$!; register_pid "$dfu_b"
     info "Waiting 15s for VM to present DFU device..."
     sleep 15
-    _mk ramdisk_send IRECOVERY="$irecovery_wrap"; rc=$?
+    _mk ramdisk_send IRECOVERY=.limd/bin/irecovery_retry; rc=$?
     kill "$dfu_b" 2>/dev/null
     pkill -f "vphone-cli.*--dfu" 2>/dev/null || true
     wait "$dfu_b" 2>/dev/null
