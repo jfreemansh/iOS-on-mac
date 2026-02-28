@@ -40,10 +40,12 @@ run_phase5_ramdisk() {
     echo "  TERMINAL 1 — start VM in DFU mode:"
     echo "    cd \"$vphone_dir\" && make boot_dfu VM_DIR=\"$VM_DIR\" CPU=${VM_CPU:-8} MEMORY=${VM_MEMORY:-16384}"
     echo
+    local ramdisk_wrapper="$SCRIPT_DIR/lib/ramdisk_send_wrapper.sh"
+    local irecovery_bin="$vphone_dir/.limd/bin/irecovery"
     echo "  TERMINAL 2 — once VM shows 'VM started in DFU mode', send ramdisk:"
-    echo "    cd \"$vphone_dir\" && make ramdisk_send VM_DIR=\"$VM_DIR\""
+    echo "    IRECOVERY=\"$irecovery_bin\" zsh \"$ramdisk_wrapper\" \"$VM_DIR/Ramdisk\""
     echo
-    echo "  Wait for ramdisk_send to complete (shows 'Boot sequence complete')."
+    echo "  Wait for it to complete (shows 'Boot sequence complete')."
     echo "  Leave Terminal 1 running — the VM must stay up for SSH."
     echo
     read -r -p "Press ENTER when ramdisk_send is complete: "
