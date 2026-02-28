@@ -56,7 +56,8 @@ run_phase5_ramdisk() {
     echo "  TERMINAL 1 — start VM in DFU mode:"
     echo "    cd \"$vphone_dir\" && make boot_dfu VM_DIR=\"$VM_DIR\" CPU=${VM_CPU:-8} MEMORY=${VM_MEMORY:-16384}"
     echo
-    echo "  TERMINAL 2 — once VM shows 'VM started in DFU mode', send ramdisk:"
+    echo "  TERMINAL 2 — once VM shows 'VM started in DFU mode':"
+    echo "    cd \"$vphone_dir\" && make ramdisk_build VM_DIR=\"$VM_DIR\""
     echo "    cd \"$vphone_dir\" && make ramdisk_send VM_DIR=\"$VM_DIR\""
     echo
     echo "  Wait for 'Boot sequence complete'. Leave Terminal 1 running."
